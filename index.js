@@ -36,6 +36,7 @@ let isAttacking = false
 let isEating = false
 let pvpInterval = null
 let afkInterval = null
+let isConnecting = false
 
 let currentVault = {
   title: 'Chưa mở kho nào',
@@ -84,8 +85,8 @@ function getInventoryItems() {
 function stopAllModes() {
   isPvPActive = false
   isAttacking = false
-  if (afkInterval) clearInterval(afkInterval)
-  if (pvpInterval) clearInterval(pvpInterval)
+  if (afkInterval) { clearInterval(afkInterval); afkInterval = null; }
+  if (pvpInterval) { clearInterval(pvpInterval); pvpInterval = null; }
 }
 
 function startAFK(bot) {
@@ -93,10 +94,10 @@ function startAFK(bot) {
   afkInterval = setInterval(() => {
     if (bot && bot.entity && isOnline) {
       bot.setControlState('jump', true)
-      setTimeout(() => bot.setControlState('jump', false), 200)
+      setTimeout(() => { if (bot && bot.setControlState) bot.setControlState('jump', false) }, 200)
     }
-  }, 4000)
-  addLog('🔄 Đã chuyển sang chế độ AFK nhảy nhảy thông thường.')
+  }, 5000)
+  addLog('🔄 Đã chuyển sang chế độ AFK nhảy thông thường.')
 }
 
 async function checkAndEat(bot) {
@@ -167,10 +168,10 @@ async function performLegitCombo(bot) {
     await bot.lookAt(targetPos, true)
 
     bot.setControlState('jump', true)
-    setTimeout(() => bot.setControlState('jump', false), 150)
+    setTimeout(() => { if (bot && bot.setControlState) bot.setControlState('jump', false) }, 150)
 
     setTimeout(() => {
-      if (bot.entity && target && isPvPActive) {
+      if (bot && bot.entity && target && isPvPActive && isOnline) {
         bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true)
         bot.attack(target)
         addLog(`⚔️ Đánh [${target.username}] | Đồ đang cầm: [${currentWeapon}]`)
@@ -185,7 +186,7 @@ function startPvP(bot) {
   isPvPActive = true
   pvpInterval = setInterval(() => {
     performLegitCombo(bot)
-  }, 1100)
+  }, 1200)
   addLog('⚔️ Đã BẬT Chế độ PvP Legit!')
 }
 
@@ -316,17 +317,19 @@ function startWebServer(port) {
     }
 
     if (parsedUrl.pathname === '/restart' && req.method === 'POST') {
-      if (!isOnline) {
-        addLog('Yêu cầu khởi động lại bot từ Web Dashboard...')
-        if (botInstance) botInstance.end()
-        createBotInstance()
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ success: true, message: 'Đang khởi động lại...' }))
-      } else {
+      if (isConnecting) {
         res.writeHead(400, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ success: false, message: 'Bot đang online, không thể restart!' }))
+        return res.end(JSON.stringify({ success: false, message: 'Đang trong quá trình kết nối, vui lòng chờ!' }))
       }
-      return
+      addLog('Yêu cầu khởi động lại bot từ Web Dashboard...')
+      stopAllModes()
+      if (botInstance) {
+        botInstance.end()
+        botInstance = null
+      }
+      setTimeout(() => createBotInstance(), 2000)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end(JSON.stringify({ success: true, message: 'Đang khởi động lại...' }))
     }
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -362,7 +365,7 @@ function startWebServer(port) {
           .action-btn-group { display: flex; gap: 10px; margin-top: 14px; }
           .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-weight: 700; font-size: 13px; cursor: pointer; }
           .btn-stop { background: ${isOnline ? '#ef4444' : '#334155'}; color: ${isOnline ? '#ffffff' : '#64748b'}; cursor: ${isOnline ? 'pointer' : 'not-allowed'}; }
-          .btn-restart { background: ${isOnline ? '#334155' : '#22c55e'}; color: ${isOnline ? '#64748b' : '#ffffff'}; cursor: ${isOnline ? 'not-allowed' : 'pointer'}; }
+          .btn-restart { background: #22c55e; color: #ffffff; cursor: pointer; }
           .pvp-box { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 14px; text-align: left; }
           .btn-pvp { width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none; font-weight: 700; cursor: pointer; color: white; }
         </style>
@@ -381,7 +384,7 @@ function startWebServer(port) {
                 }
                 updatePvPUI(pvpStatus);
               });
-            setInterval(fetchData, 2000);
+            setInterval(fetchData, 3000);
           }
 
           function updatePvPUI(status) {
@@ -489,12 +492,11 @@ function startWebServer(port) {
           }
 
           function restartBot() {
-            if (${isOnline}) return;
             fetch('/restart', { method: 'POST' })
               .then(res => res.json())
               .then(data => {
                 alert(data.message);
-                window.location.reload();
+                setTimeout(() => window.location.reload(), 2000);
               });
           }
         </script>
@@ -555,8 +557,8 @@ function startWebServer(port) {
             <button class="btn-action btn-stop" onclick="stopBot()" ${isOnline ? '' : 'disabled'}>
               🛑 Tắt Bot
             </button>
-            <button class="btn-action btn-restart" onclick="restartBot()" ${isOnline ? 'disabled' : ''}>
-              🔄 Bật lại Bot
+            <button class="btn-action btn-restart" onclick="restartBot()">
+              🔄 Bật / Restart Bot
             </button>
           </div>
         </div>
@@ -576,6 +578,17 @@ function startWebServer(port) {
 startWebServer(process.env.PORT || 8080)
 
 function createBotInstance() {
+  if (isConnecting) return
+  isConnecting = true
+  stopAllModes()
+
+  if (botInstance) {
+    try {
+      botInstance.end()
+    } catch (e) {}
+    botInstance = null
+  }
+
   botStatus = 'Đang kết nối server...'
   isOnline = false
   addLog('Đang kết nối đến server Minecraft...')
@@ -614,6 +627,7 @@ function createBotInstance() {
   })
 
   bot.on('spawn', () => {
+    isConnecting = false
     botStatus = 'Đang hoạt động (Online)'
     isOnline = true
     addLog(`Bot ${BOT_USERNAME} vào server thành công!`)
@@ -626,7 +640,7 @@ function createBotInstance() {
           safeChat(HOME_COMMAND)
           addLog('Đã thực hiện dịch chuyển /home 1')
           startAFK(bot)
-        }, 2000)
+        }, 3000)
       }, 3000)
     } else {
       startAFK(bot)
@@ -640,7 +654,7 @@ function createBotInstance() {
     setTimeout(() => {
       safeChat(HOME_COMMAND)
       startAFK(bot)
-    }, 2000)
+    }, 3000)
   })
 
   bot.on('message', (message) => {
@@ -656,6 +670,7 @@ function createBotInstance() {
   })
 
   bot.on('kicked', () => {
+    isConnecting = false
     stopAllModes()
     botStatus = 'Bị đá khỏi server (Offline)'
     isOnline = false
@@ -663,6 +678,7 @@ function createBotInstance() {
   })
 
   bot.on('error', (err) => {
+    isConnecting = false
     stopAllModes()
     botStatus = 'Gặp lỗi kết nối'
     isOnline = false
@@ -670,6 +686,7 @@ function createBotInstance() {
   })
 
   bot.on('end', () => {
+    isConnecting = false
     stopAllModes()
     botStatus = 'Đã ngắt kết nối (Offline)'
     isOnline = false
