@@ -4,7 +4,7 @@ const url = require('url')
 
 const SERVER_HOST = 'puffernetwork.io.vn'
 const SERVER_PORT = 25863
-const BOT_USERNAME = 'domcon123'
+const BOT_USERNAME = 'hellodomcon123'
 const LOGIN_COMMAND = '/login domcon1234'
 const HOME_COMMAND = '/home 1'
 const WEB_PASSWORD = 'condombebong123'
