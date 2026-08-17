@@ -18,23 +18,12 @@ const SENSITIVE_WORDS = [
   '/passwd'
 ]
 
-const WEAPON_DAMAGE = {
-  'netherite_sword': 8, 'diamond_sword': 7, 'iron_sword': 6, 'stone_sword': 5, 'golden_sword': 4, 'wooden_sword': 4,
-  'netherite_axe': 10, 'diamond_axe': 9, 'iron_axe': 9, 'stone_axe': 9, 'golden_axe': 7, 'wooden_axe': 7
-}
-
-const FOOD_NAMES = ['cooked_beef', 'cooked_porkchop', 'golden_apple', 'bread', 'cooked_chicken', 'cooked_mutton', 'apple']
-
 let botStatus = 'Đang khởi động...'
 let isOnline = false
 let startTime = Date.now()
 let logs = []
 let botInstance = null
 
-let isPvPActive = false
-let isAttacking = false
-let isEating = false
-let pvpInterval = null
 let afkInterval = null
 let isConnecting = false
 
@@ -79,14 +68,11 @@ function getInventoryItems() {
 }
 
 // ==========================================
-// LOGIC PVP & AFK & TỰ ĐỘNG ĂN
+// LOGIC AFK
 // ==========================================
 
 function stopAllModes() {
-  isPvPActive = false
-  isAttacking = false
   if (afkInterval) { clearInterval(afkInterval); afkInterval = null; }
-  if (pvpInterval) { clearInterval(pvpInterval); pvpInterval = null; }
 }
 
 function startAFK(bot) {
@@ -100,96 +86,6 @@ function startAFK(bot) {
   addLog('🔄 Đã chuyển sang chế độ AFK nhảy thông thường.')
 }
 
-async function checkAndEat(bot) {
-  if (!bot || isEating || !isOnline) return false
-  if (bot.health <= 15 || bot.food <= 15) {
-    const foodItem = bot.inventory.items().find(item => FOOD_NAMES.includes(item.name))
-    if (foodItem) {
-      try {
-        isEating = true
-        addLog(`🍖 Máu/Thức ăn thấp (${bot.health}/20 HP). Đang ăn ${foodItem.displayName || foodItem.name}...`)
-        await bot.equip(foodItem, 'hand')
-        await bot.consume()
-        addLog('✅ Đã ăn xong!')
-        isEating = false
-        return true
-      } catch (err) {
-        isEating = false
-      }
-    }
-  }
-  return false
-}
-
-async function equipBestWeapon(bot) {
-  if (!bot || !bot.inventory) return 'Tay không'
-  let bestItem = null
-  let maxDamage = 0
-
-  for (const item of bot.inventory.items()) {
-    const damage = WEAPON_DAMAGE[item.name] || 0
-    if (damage > maxDamage) {
-      maxDamage = damage
-      bestItem = item
-    }
-  }
-
-  if (bestItem) {
-    const heldItem = bot.heldItem
-    if (!heldItem || heldItem.name !== bestItem.name) {
-      try {
-        await bot.equip(bestItem, 'hand')
-      } catch (err) {}
-    }
-    return bestItem.displayName || bestItem.name
-  }
-
-  return bot.heldItem ? (bot.heldItem.displayName || bot.heldItem.name) : 'Tay không'
-}
-
-async function performLegitCombo(bot) {
-  if (!bot || !bot.entity || !isPvPActive || isAttacking || isEating || !isOnline) return
-
-  const ate = await checkAndEat(bot)
-  if (ate) return
-
-  const filter = (entity) => 
-    entity.type === 'player' && 
-    entity.username !== bot.username && 
-    entity.metadata[6] !== 0
-
-  const target = bot.nearestEntity(filter)
-
-  if (target && bot.entity.position.distanceTo(target.position) <= 4.0) {
-    isAttacking = true
-
-    const currentWeapon = await equipBestWeapon(bot)
-    const targetPos = target.position.offset(0, target.height * 0.8, 0)
-    await bot.lookAt(targetPos, true)
-
-    bot.setControlState('jump', true)
-    setTimeout(() => { if (bot && bot.setControlState) bot.setControlState('jump', false) }, 150)
-
-    setTimeout(() => {
-      if (bot && bot.entity && target && isPvPActive && isOnline) {
-        bot.lookAt(target.position.offset(0, target.height * 0.8, 0), true)
-        bot.attack(target)
-        addLog(`⚔️ Đánh [${target.username}] | Đồ đang cầm: [${currentWeapon}]`)
-      }
-      isAttacking = false
-    }, 380)
-  }
-}
-
-function startPvP(bot) {
-  stopAllModes()
-  isPvPActive = true
-  pvpInterval = setInterval(() => {
-    performLegitCombo(bot)
-  }, 1200)
-  addLog('⚔️ Đã BẬT Chế độ PvP Legit!')
-}
-
 // ==========================================
 // WEB SERVER DASHBOARD
 // ==========================================
@@ -201,7 +97,7 @@ function startWebServer(port) {
 
     if (parsedUrl.pathname === '/check-auth' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
-      return res.end(JSON.stringify({ isAuth: authenticatedIPs.has(clientIP), isPvP: isPvPActive }))
+      return res.end(JSON.stringify({ isAuth: authenticatedIPs.has(clientIP) }))
     }
 
     if (parsedUrl.pathname === '/get-inventory' && req.method === 'GET') {
@@ -209,40 +105,8 @@ function startWebServer(port) {
       return res.end(JSON.stringify({ 
         success: true, 
         items: getInventoryItems(),
-        vault: currentVault,
-        isPvP: isPvPActive,
-        heldItem: botInstance && botInstance.heldItem ? (botInstance.heldItem.displayName || botInstance.heldItem.name) : 'Tay không'
+        vault: currentVault
       }))
-    }
-
-    if (parsedUrl.pathname === '/toggle-pvp' && req.method === 'POST') {
-      let body = ''
-      req.on('data', chunk => { body += chunk.toString() })
-      req.on('end', () => {
-        try {
-          const data = JSON.parse(body)
-          if (!authenticatedIPs.has(clientIP)) {
-            if (data.password !== WEB_PASSWORD) {
-              res.writeHead(401, { 'Content-Type': 'application/json' })
-              return res.end(JSON.stringify({ success: false, message: 'Sai mật khẩu xác thực!' }))
-            }
-            authenticatedIPs.add(clientIP)
-          }
-
-          if (data.enable) {
-            startPvP(botInstance)
-          } else {
-            startAFK(botInstance)
-          }
-
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          return res.end(JSON.stringify({ success: true, isPvP: isPvPActive, isAuth: true }))
-        } catch (e) {
-          res.writeHead(400, { 'Content-Type': 'application/json' })
-          return res.end(JSON.stringify({ success: false, message: 'Lỗi dữ liệu!' }))
-        }
-      })
-      return
     }
 
     if (parsedUrl.pathname === '/send-chat' && req.method === 'POST') {
@@ -366,42 +230,20 @@ function startWebServer(port) {
           .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-weight: 700; font-size: 13px; cursor: pointer; }
           .btn-stop { background: ${isOnline ? '#ef4444' : '#334155'}; color: ${isOnline ? '#ffffff' : '#64748b'}; cursor: ${isOnline ? 'pointer' : 'not-allowed'}; }
           .btn-restart { background: #22c55e; color: #ffffff; cursor: pointer; }
-          .pvp-box { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 14px; text-align: left; }
-          .btn-pvp { width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none; font-weight: 700; cursor: pointer; color: white; }
         </style>
         <script>
           let isIPAuthenticated = false;
-          let pvpStatus = false;
 
           window.onload = function() {
             fetch('/check-auth')
               .then(res => res.json())
               .then(data => {
                 isIPAuthenticated = data.isAuth;
-                pvpStatus = data.isPvP;
                 if (isIPAuthenticated) {
                   document.getElementById('chatPwd').style.display = 'none';
                 }
-                updatePvPUI(pvpStatus);
               });
             setInterval(fetchData, 3000);
-          }
-
-          function updatePvPUI(status) {
-            const btn = document.getElementById('btnPvP');
-            const txt = document.getElementById('pvpTxt');
-            pvpStatus = status;
-            if (pvpStatus) {
-              btn.innerText = '🛡️ Tắt Chế Độ PvP (Chuyển AFK)';
-              btn.style.background = '#ef4444';
-              txt.innerText = 'BẬT (Đang săn người chơi & Ăn hồi máu)';
-              txt.style.color = '#4ade80';
-            } else {
-              btn.innerText = '⚔️ Bật Chế Độ PvP';
-              btn.style.background = '#22c55e';
-              txt.innerText = 'TẮT (Đang AFK nhảy thông thường)';
-              txt.style.color = '#f87171';
-            }
           }
 
           function fetchData() {
@@ -409,7 +251,6 @@ function startWebServer(port) {
               .then(res => res.json())
               .then(data => {
                 if (data.success) {
-                  document.getElementById('heldItemTxt').innerText = data.heldItem;
                   const tbody = document.getElementById('invBody');
                   if (data.items.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="3" class="empty-inv">Túi đồ trống...</td></tr>';
@@ -424,29 +265,6 @@ function startWebServer(port) {
                   }
                 }
               });
-          }
-
-          function togglePvP() {
-            const pwd = document.getElementById('chatPwd').value;
-            if (!isIPAuthenticated && !pwd) return alert('Vui lòng nhập mật khẩu xác thực!');
-
-            fetch('/toggle-pvp', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ enable: !pvpStatus, password: pwd })
-            })
-            .then(res => res.json())
-            .then(data => {
-              if (data.success) {
-                if (data.isAuth) {
-                  isIPAuthenticated = true;
-                  document.getElementById('chatPwd').style.display = 'none';
-                }
-                updatePvPUI(data.isPvP);
-              } else {
-                alert(data.message);
-              }
-            });
           }
 
           function sendChatMessage() {
@@ -513,16 +331,6 @@ function startWebServer(port) {
           <div class="info-group">
             <div class="label">Thời gian hoạt động</div>
             <div class="value">${getUptime()}</div>
-          </div>
-          <div class="info-group">
-            <div class="label">Vũ khí / Vật phẩm đang cầm</div>
-            <div class="value" id="heldItemTxt" style="color: #38bdf8;">Đang tải...</div>
-          </div>
-
-          <div class="pvp-box">
-            <div class="label">Chế độ PvP Tự Động</div>
-            <div class="value" id="pvpTxt">Đang tải...</div>
-            <button id="btnPvP" class="btn-pvp" onclick="togglePvP()">Bật/Tắt PvP</button>
           </div>
 
           <div class="section-title">🎒 Túi Đồ Nhân Vật</div>
