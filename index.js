@@ -2,21 +2,32 @@ const http = require('http')
 const mineflayer = require('mineflayer')
 const url = require('url')
 
-const SERVER_HOST = 'puffernetwork.io.vn'
-const SERVER_PORT = 25863
-const BOT_USERNAME = 'hellodomcon123'
-const LOGIN_COMMAND = '/login domcon1234'
-const HOME_COMMAND = '/tpa domcon123'
-const WEB_PASSWORD = 'condombebong123'
+// 1. ĐỌC BIẾN MÔI TRƯỜNG TỪ DASHBOARD
+const BOT_USERNAME = process.env.BOT_USERNAME
+const HOME_COMMAND = process.env.MC_HOME_COMMAND
+const LOGIN_COMMAND = process.env.MC_LOGIN_COMMAND
+const SERVER_PORT = parseInt(process.env.MC_PORT) || 25863
+const WEB_PASSWORD = process.env.WEB_PASSWORD
+const MC_VERSION = process.env.MC_VERSION || '1.21.11'
+const SERVER_HOST = process.env.MC_HOST || 'puffernetwork.io.vn'
 
+// Kiểm tra biến bắt buộc
+if (!SERVER_HOST || !BOT_USERNAME || !WEB_PASSWORD) {
+  console.error('❌ LỖI: Chưa cấu hình đủ biến môi trường (MC_HOST, BOT_USERNAME, WEB_PASSWORD)!')
+  process.exit(1)
+}
+
+// Danh sách từ khóa cần che giấu khỏi Log
 const SENSITIVE_WORDS = [
-  'domcon1234', 
-  'condombebong123', 
-  '/login', 
-  '/register', 
+  WEB_PASSWORD,
+  LOGIN_COMMAND,
+  LOGIN_COMMAND ? LOGIN_COMMAND.split(' ')[1] : null,
+  SERVER_HOST,
+  '/login',
+  '/register',
   '/changepassword',
   '/passwd'
-]
+].filter(Boolean)
 
 let botStatus = 'Đang khởi động...'
 let isOnline = false
@@ -24,7 +35,6 @@ let startTime = Date.now()
 let logs = []
 let botInstance = null
 
-// Biến quản lý Auto-Reconnect
 let reconnectTimer = null
 let autoReconnectEnabled = true 
 
@@ -39,15 +49,22 @@ function getClientIP(req) {
   return req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress
 }
 
-function containsSensitiveData(text) {
-  if (!text) return false
-  return SENSITIVE_WORDS.some(word => text.toLowerCase().includes(word.toLowerCase()))
+function sanitizeText(text) {
+  if (!text) return ''
+  let sanitized = text
+  SENSITIVE_WORDS.forEach(word => {
+    if (word && word.length > 2) {
+      const regex = new RegExp(word.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&'), 'gi')
+      sanitized = sanitized.replace(regex, '***')
+    }
+  })
+  return sanitized
 }
 
 function addLog(msg) {
-  if (containsSensitiveData(msg)) return
+  const safeMsg = sanitizeText(msg)
   const time = new Date().toLocaleTimeString('vi-VN')
-  logs.unshift(`[${time}] ${msg}`)
+  logs.unshift(`[${time}] ${safeMsg}`)
   if (logs.length > 20) logs.pop()
 }
 
@@ -68,6 +85,7 @@ function getInventoryItems() {
   }))
 }
 
+// 2. WEB DASHBOARD
 function startWebServer(port) {
   const server = http.createServer((req, res) => {
     const parsedUrl = url.parse(req.url, true)
@@ -100,11 +118,7 @@ function startWebServer(port) {
 
           if (data.message) {
             botInstance.chat(data.message)
-            if (!containsSensitiveData(data.message)) {
-              addLog(`[Lệnh Web]: ${data.message}`)
-            } else {
-              addLog(`[Lệnh Web]: [Đã ẩn tin nhắn bảo mật]`)
-            }
+            addLog(`[Lệnh Web]: ${data.message}`)
             
             res.writeHead(200, { 'Content-Type': 'application/json' })
             return res.end(JSON.stringify({ success: true, message: 'Đã gửi thành công!', isAuth: true }))
@@ -181,128 +195,33 @@ function startWebServer(port) {
         <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700&display=swap" rel="stylesheet">
         <style>
           * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; }
-          body {
-            background: #0f172a;
-            color: #f8fafc;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
-          }
-          .card {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 16px;
-            padding: 24px;
-            width: 100%;
-            max-width: 520px;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
-            text-align: center;
-            position: relative;
-          }
-          .header-ctrl {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-          }
+          body { background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+          .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; width: 100%; max-width: 520px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5); text-align: center; position: relative; }
+          .header-ctrl { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
           .title { font-size: 20px; font-weight: 700; color: #38bdf8; }
-          .btn-auto-refresh {
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
-            border: 1px solid #334155;
-            cursor: pointer;
-            background: #0f172a;
-            color: #38bdf8;
-          }
-          .btn-auto-refresh.paused {
-            color: #f87171;
-            border-color: #ef4444;
-          }
-          .badge {
-            display: inline-block;
-            padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            background: ${isOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'};
-            color: ${isOnline ? '#4ade80' : '#f87171'};
-            border: 1px solid ${isOnline ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'};
-          }
+          .btn-auto-refresh { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid #334155; cursor: pointer; background: #0f172a; color: #38bdf8; }
+          .btn-auto-refresh.paused { color: #f87171; border-color: #ef4444; }
+          .badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 16px; background: ${isOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'}; color: ${isOnline ? '#4ade80' : '#f87171'}; border: 1px solid ${isOnline ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)'}; }
           .info-group { background: #0f172a; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; text-align: left; }
           .label { font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase; }
           .value { font-size: 14px; font-weight: 600; color: #f1f5f9; margin-top: 2px; }
-
           .section-title { font-size: 12px; color: #38bdf8; font-weight: 700; text-align: left; margin: 16px 0 6px 0; text-transform: uppercase; }
-          
-          .inv-table-container {
-            max-height: 120px;
-            overflow-y: auto;
-            border: 1px solid #334155;
-            border-radius: 8px;
-            background: #0f172a;
-          }
+          .inv-table-container { max-height: 120px; overflow-y: auto; border: 1px solid #334155; border-radius: 8px; background: #0f172a; }
           table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
           th, td { padding: 8px 12px; border-bottom: 1px solid #1e293b; }
           th { background: #1e293b; color: #38bdf8; font-weight: 600; position: sticky; top: 0; }
           td { color: #cbd5e1; }
           .empty-inv { text-align: center; padding: 12px; color: #64748b; font-style: italic; }
-
           .chat-box-container { margin-top: 14px; text-align: left; }
-          .input-field {
-            width: 100%;
-            padding: 10px;
-            margin-top: 6px;
-            border-radius: 8px;
-            border: 1px solid #334155;
-            background: #0f172a;
-            color: #fff;
-            font-size: 13px;
-          }
-          .btn-send {
-            width: 100%;
-            padding: 10px;
-            margin-top: 8px;
-            border-radius: 8px;
-            border: none;
-            background: #38bdf8;
-            color: #0f172a;
-            font-weight: 700;
-            cursor: pointer;
-          }
+          .input-field { width: 100%; padding: 10px; margin-top: 6px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 13px; }
+          .btn-send { width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
           .btn-send:hover { background: #0284c7; color: #fff; }
-
-          .log-box {
-            background: #090d16;
-            border: 1px solid #1e293b;
-            border-radius: 10px;
-            padding: 10px;
-            height: 100px;
-            overflow-y: auto;
-            text-align: left;
-            font-family: monospace;
-            font-size: 11px;
-            color: #a7f3d0;
-          }
+          .log-box { background: #090d16; border: 1px solid #1e293b; border-radius: 10px; padding: 10px; height: 100px; overflow-y: auto; text-align: left; font-family: monospace; font-size: 11px; color: #a7f3d0; }
           .log-item { margin-bottom: 4px; word-break: break-all; }
-          
           .action-btn-group { display: flex; gap: 10px; margin-top: 14px; }
-          .btn-action {
-            flex: 1;
-            padding: 10px;
-            border-radius: 10px;
-            border: none;
-            font-weight: 700;
-            font-size: 13px;
-            cursor: pointer;
-          }
+          .btn-action { flex: 1; padding: 10px; border-radius: 10px; border: none; font-weight: 700; font-size: 13px; cursor: pointer; }
           .btn-stop { background: #ef4444; color: #ffffff; }
           .btn-stop:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
-          
           .btn-restart { background: #22c55e; color: #ffffff; }
           .btn-restart:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
         </style>
@@ -314,10 +233,8 @@ function startWebServer(port) {
           function startAutoReload() {
             if (refreshTimer) clearInterval(refreshTimer);
             refreshTimer = setInterval(() => {
-              if (autoRefreshEnabled) {
-                location.reload(); // Làm mới (F5) toàn bộ trang
-              }
-            }, 3000); // 3 giây F5 1 lần
+              if (autoRefreshEnabled) location.reload();
+            }, 3000);
           }
 
           window.onload = function() {
@@ -330,7 +247,6 @@ function startWebServer(port) {
                 }
               });
 
-            // Tạm dừng F5 khi người dùng đang bấm vào ô nhập dữ liệu
             const inputs = document.querySelectorAll('.input-field');
             inputs.forEach(input => {
               input.addEventListener('focus', () => { 
@@ -375,9 +291,7 @@ function startWebServer(port) {
             .then(res => res.json())
             .then(data => {
               alert(data.message);
-              if (data.success) {
-                location.reload();
-              }
+              if (data.success) location.reload();
             });
           }
 
@@ -395,9 +309,7 @@ function startWebServer(port) {
             .then(res => res.json())
             .then(data => {
               alert(data.message);
-              if (data.success) {
-                location.reload();
-              }
+              if (data.success) location.reload();
             });
           }
 
@@ -421,8 +333,8 @@ function startWebServer(port) {
           <div class="badge">● ${botStatus}</div>
           
           <div class="info-group">
-            <div class="label">Tên Bot / Server</div>
-            <div class="value">${BOT_USERNAME} (${SERVER_HOST})</div>
+            <div class="label">Tên Bot / Server / Phiên bản</div>
+            <div class="value">${BOT_USERNAME} (${sanitizeText(SERVER_HOST)}) [v${MC_VERSION}]</div>
           </div>
           <div class="info-group">
             <div class="label">Thời gian hoạt động</div>
@@ -515,7 +427,6 @@ function startWebServer(port) {
 
 startWebServer(process.env.PORT || 8080)
 
-// Hàm xử lý Reconnect
 function handleReconnect() {
   if (!autoReconnectEnabled) return
   if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -531,6 +442,7 @@ function handleReconnect() {
   }, 10000)
 }
 
+// 3. KHỞI TẠO MINEFLAYER BOT
 function createBotInstance() {
   botStatus = 'Đang kết nối server...'
   isOnline = false
@@ -540,7 +452,7 @@ function createBotInstance() {
     host: SERVER_HOST,
     port: SERVER_PORT,
     username: BOT_USERNAME,
-    version: '1.21.11',
+    version: MC_VERSION,
     checkTimeoutInterval: 120000,
   })
 
@@ -548,13 +460,9 @@ function createBotInstance() {
   let loginFlowStarted = false
 
   function safeChat(msg) {
-    if (typeof bot.chat === 'function') {
+    if (typeof bot.chat === 'function' && msg) {
       bot.chat(msg)
-      if (!containsSensitiveData(msg)) {
-        addLog(`[Hệ thống]: ${msg}`)
-      } else {
-        addLog(`[Hệ thống]: [Đã ẩn thông tin bảo mật]`)
-      }
+      addLog(`[Hệ thống]: ${msg}`)
     }
   }
 
@@ -601,11 +509,13 @@ function createBotInstance() {
     loginFlowStarted = true
 
     setTimeout(() => {
-      safeChat(LOGIN_COMMAND)
+      if (LOGIN_COMMAND) safeChat(LOGIN_COMMAND)
 
       setTimeout(() => {
-        safeChat(HOME_COMMAND)
-        addLog(`Đã gửi yêu cầu dịch chuyển ${HOME_COMMAND}`)
+        if (HOME_COMMAND) {
+          safeChat(HOME_COMMAND)
+          addLog(`Đã gửi yêu cầu dịch chuyển ${HOME_COMMAND}`)
+        }
       }, 2000)
     }, 3000)
 
@@ -620,20 +530,18 @@ function createBotInstance() {
     addLog('⚠️ Bot đã bị chết! Đang thực hiện tự động hồi sinh...')
     bot.respawn()
     setTimeout(() => {
-      safeChat(HOME_COMMAND)
-      addLog(`Đã gửi lại yêu cầu ${HOME_COMMAND} sau khi hồi sinh`)
+      if (HOME_COMMAND) {
+        safeChat(HOME_COMMAND)
+        addLog(`Đã gửi lại yêu cầu ${HOME_COMMAND} sau khi hồi sinh`)
+      }
     }, 2000)
   })
 
   bot.on('message', (message) => {
     const text = message.toString().trim()
     if (text) {
-      if (!containsSensitiveData(text)) {
-        console.log(`[Server] ${text}`)
-        addLog(`[Server]: ${text}`)
-      } else {
-        addLog(`[Server]: [Thông tin hệ thống đã được bảo mật]`)
-      }
+      console.log(`[Server] ${sanitizeText(text)}`)
+      addLog(`[Server]: ${text}`)
     }
   })
 
