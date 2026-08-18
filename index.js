@@ -1,75 +1,43 @@
+'use strict'
+
 const http = require('http')
 const mineflayer = require('mineflayer')
 const url = require('url')
 
-// ======================================================
+// ============================================================
 // CONFIG
-// ======================================================
+// ============================================================
 
-const SERVER_HOST = process.env.MC_HOST || 'puffernetwork.io.vn'
-const SERVER_PORT = Number(process.env.MC_PORT || 25863)
+const SERVER_HOST = process.env.MC_HOST || 'gemsmp.club'
+const SERVER_PORT = Number(process.env.MC_PORT || 19132)
 
-const BOT_USERNAME = process.env.MC_USERNAME || 'hellodomcon123'
-const MC_VERSION = process.env.MC_VERSION || '1.21.11'
+const BOT_USERNAME =
+  process.env.BOT_USERNAME || 'domcon123'
 
-const LOGIN_COMMAND = process.env.LOGIN_COMMAND || '/login domcon1234'
-const HOME_COMMAND = process.env.HOME_COMMAND || '/tpa domcon123'
+const LOGIN_COMMAND =
+  process.env.MC_LOGIN_COMMAND || ''
+
+const HOME_COMMAND =
+  process.env.MC_HOME_COMMAND || '/server eco'
 
 const WEB_PASSWORD =
-  process.env.WEB_PASSWORD || 'CHANGE_THIS_PASSWORD'
+  process.env.WEB_PASSWORD || ''
 
-const WEB_PORT = Number(process.env.PORT || 8080)
+const WEB_PORT =
+  Number(process.env.PORT || 8080)
 
-const RECONNECT_DELAY = 15000
-const LOGIN_DELAY = 3000
-const COMMAND_DELAY = 3000
-const AFK_INTERVAL = 5000
+const MC_VERSION =
+  process.env.MC_VERSION || '1.21.11'
 
-// ======================================================
-// SECURITY
-// ======================================================
-
-const SENSITIVE_WORDS = [
-  'domcon1234',
-  'condombebong123',
-  '/login',
-  '/register',
-  '/changepassword',
-  '/passwd'
-]
-
-const authenticatedIPs = new Set()
-
-function getClientIP(req) {
-  const forwarded = req.headers['x-forwarded-for']
-
-  if (forwarded) {
-    return forwarded.split(',')[0].trim()
-  }
-
-  return req.socket.remoteAddress || 'unknown'
-}
-
-function containsSensitiveData(text) {
-  if (!text) return false
-
-  const lower = String(text).toLowerCase()
-
-  return SENSITIVE_WORDS.some(word =>
-    lower.includes(word.toLowerCase())
-  )
-}
-
-// ======================================================
+// ============================================================
 // STATE
-// ======================================================
+// ============================================================
 
 let botStatus = 'Đang khởi động...'
 let isOnline = false
 let startTime = Date.now()
 
 let logs = []
-
 let botInstance = null
 
 let afkInterval = null
@@ -77,50 +45,113 @@ let reconnectTimeout = null
 
 let isConnecting = false
 let manualStop = false
-let restartInProgress = false
-
-let connectionGeneration = 0
 
 let currentVault = {
   title: 'Chưa mở kho nào',
   items: []
 }
 
-// ======================================================
-// LOGGING
-// ======================================================
+const authenticatedIPs = new Set()
+
+// ============================================================
+// SECURITY / LOGGING
+// ============================================================
+
+const SENSITIVE_WORDS = [
+  '/login',
+  '/register',
+  '/changepassword',
+  '/passwd'
+]
+
+function containsSensitiveData(text) {
+  if (!text) return false
+
+  const value = String(text).toLowerCase()
+
+  return SENSITIVE_WORDS.some(word =>
+    value.includes(word.toLowerCase())
+  )
+}
+
+function sanitizeLog(text) {
+  if (!text) {
+    return '[Thông tin bảo mật đã ẩn]'
+  }
+
+  const value = String(text)
+
+  if (containsSensitiveData(value)) {
+    return '[Thông tin bảo mật đã ẩn]'
+  }
+
+  return value
+}
 
 function addLog(message) {
-  if (containsSensitiveData(message)) {
-    message = '[Thông tin bảo mật đã được ẩn]'
-  }
-
+  const safeMessage = sanitizeLog(message)
   const time = new Date().toLocaleTimeString('vi-VN')
 
-  logs.unshift(`[${time}] ${message}`)
+  logs.unshift(
+    `[${time}] ${safeMessage}`
+  )
 
   if (logs.length > 40) {
-    logs.pop()
+    logs.length = 40
   }
 
-  console.log(`[BOT] ${message}`)
+  console.log(`[BOT] ${safeMessage}`)
+}
+
+function getClientIP(req) {
+  const forwarded =
+    req.headers['x-forwarded-for']
+
+  if (forwarded) {
+    return forwarded
+      .split(',')[0]
+      .trim()
+  }
+
+  return req.socket.remoteAddress || 'unknown'
 }
 
 function getUptime() {
-  const seconds = Math.floor(
-    (Date.now() - startTime) / 1000
-  )
+  const seconds =
+    Math.floor(
+      (Date.now() - startTime) / 1000
+    )
 
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
+  const h =
+    Math.floor(seconds / 3600)
+
+  const m =
+    Math.floor(
+      (seconds % 3600) / 60
+    )
+
+  const s =
+    seconds % 60
 
   return `${h} giờ ${m} phút ${s} giây`
 }
 
-// ======================================================
+// ============================================================
+// HTML ESCAPE
+// ============================================================
+
+function escapeHTML(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+// ============================================================
 // INVENTORY
-// ======================================================
+// ============================================================
 
 function getInventoryItems() {
   if (
@@ -131,26 +162,30 @@ function getInventoryItems() {
     return []
   }
 
-  return botInstance.inventory.items().map(item => ({
-    name: item.displayName || item.name,
-    count: item.count,
-    slot: item.slot
-  }))
+  return botInstance.inventory
+    .items()
+    .map(item => ({
+      name:
+        item.displayName ||
+        item.name,
+
+      count:
+        item.count,
+
+      slot:
+        item.slot
+    }))
 }
 
-// ======================================================
-// AFK
-// ======================================================
+// ============================================================
+// TIMER
+// ============================================================
 
-function stopAFK() {
+function stopAllModes() {
   if (afkInterval) {
     clearInterval(afkInterval)
     afkInterval = null
   }
-}
-
-function stopAllModes() {
-  stopAFK()
 
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout)
@@ -158,50 +193,70 @@ function stopAllModes() {
   }
 }
 
-function startAFK(bot) {
-  stopAFK()
+// ============================================================
+// AFK
+// ============================================================
 
+function startAFK(bot) {
   if (!bot) return
 
-  addLog('🔄 Đã bật chế độ AFK.')
+  if (afkInterval) {
+    clearInterval(afkInterval)
+    afkInterval = null
+  }
 
   afkInterval = setInterval(() => {
     if (
       !bot ||
-      bot !== botInstance ||
+      !bot.entity ||
       !isOnline ||
-      !bot.entity
+      botInstance !== bot
     ) {
       return
     }
 
     try {
-      bot.setControlState('jump', true)
+      bot.setControlState(
+        'jump',
+        true
+      )
 
       setTimeout(() => {
-        if (
-          bot &&
-          bot === botInstance &&
-          typeof bot.setControlState === 'function'
-        ) {
-          bot.setControlState('jump', false)
-        }
+        try {
+          if (
+            bot &&
+            botInstance === bot &&
+            typeof bot.setControlState ===
+              'function'
+          ) {
+            bot.setControlState(
+              'jump',
+              false
+            )
+          }
+        } catch {}
       }, 200)
 
-    } catch (err) {
-      console.log('AFK error:', err.message)
+    } catch (error) {
+      addLog(
+        `Lỗi AFK: ${error.message}`
+      )
     }
-  }, AFK_INTERVAL)
+  }, 5000)
+
+  addLog(
+    '🔄 Đã bật chế độ AFK.'
+  )
 }
 
-// ======================================================
+// ============================================================
 // SAFE CHAT
-// ======================================================
+// ============================================================
 
 function safeChat(bot, message) {
+  if (!bot) return false
+
   if (
-    !bot ||
-    bot !== botInstance ||
     typeof bot.chat !== 'function'
   ) {
     return false
@@ -210,541 +265,133 @@ function safeChat(bot, message) {
   try {
     bot.chat(message)
 
-    if (containsSensitiveData(message)) {
-      addLog('[Hệ thống]: [Đã ẩn lệnh bảo mật]')
+    if (
+      containsSensitiveData(message)
+    ) {
+      addLog(
+        '[Hệ thống]: [Đã ẩn lệnh bảo mật]'
+      )
     } else {
-      addLog(`[Hệ thống]: ${message}`)
+      addLog(
+        `[Hệ thống]: ${message}`
+      )
     }
 
     return true
 
-  } catch (err) {
-    addLog(`❌ Không gửi được chat: ${err.message}`)
+  } catch (error) {
+    addLog(
+      `Không thể gửi chat: ${error.message}`
+    )
+
     return false
   }
 }
 
-// ======================================================
-// RECONNECT
-// ======================================================
+// ============================================================
+// HTTP HELPERS
+// ============================================================
 
-function scheduleReconnect(reason = 'Mất kết nối') {
+function sendJSON(
+  res,
+  statusCode,
+  data
+) {
+  res.writeHead(
+    statusCode,
+    {
+      'Content-Type':
+        'application/json; charset=utf-8',
 
-  if (manualStop) {
-    addLog('🛑 Bot đang được tắt thủ công, không reconnect.')
-    return
-  }
-
-  if (restartInProgress) {
-    addLog('🔄 Đang restart, bỏ qua reconnect tự động.')
-    return
-  }
-
-  if (reconnectTimeout) {
-    return
-  }
-
-  isOnline = false
-  isConnecting = false
-
-  botStatus = `Mất kết nối - thử lại sau ${RECONNECT_DELAY / 1000}s`
-
-  addLog(`${reason}`)
-
-  reconnectTimeout = setTimeout(() => {
-
-    reconnectTimeout = null
-
-    if (
-      manualStop ||
-      restartInProgress ||
-      isOnline ||
-      isConnecting
-    ) {
-      return
+      'Cache-Control':
+        'no-store'
     }
-
-    addLog('⏳ Bắt đầu kết nối lại...')
-    createBotInstance()
-
-  }, RECONNECT_DELAY)
-}
-
-// ======================================================
-// DESTROY BOT
-// ======================================================
-
-function destroyCurrentBot() {
-
-  const oldBot = botInstance
-
-  if (!oldBot) {
-    return
-  }
-
-  botInstance = null
-
-  try {
-    oldBot.removeAllListeners()
-  } catch (e) {}
-
-  try {
-    oldBot.quit()
-  } catch (e) {}
-
-  try {
-    oldBot.end()
-  } catch (e) {}
-}
-
-// ======================================================
-// CREATE BOT
-// ======================================================
-
-function createBotInstance() {
-
-  if (manualStop) {
-    addLog('🛑 Bot đang ở trạng thái tắt thủ công.')
-    return
-  }
-
-  if (isConnecting) {
-    addLog('⚠️ Đã có một kết nối đang chạy.')
-    return
-  }
-
-  if (botInstance && isOnline) {
-    addLog('⚠️ Bot đã online.')
-    return
-  }
-
-  isConnecting = true
-
-  stopAllModes()
-
-  const generation = ++connectionGeneration
-
-  botStatus = 'Đang kết nối server...'
-  isOnline = false
-
-  addLog(
-    `Đang kết nối ${SERVER_HOST}:${SERVER_PORT}...`
   )
 
-  let bot
-
-  try {
-
-    bot = mineflayer.createBot({
-      host: SERVER_HOST,
-      port: SERVER_PORT,
-      username: BOT_USERNAME,
-      version: MC_VERSION,
-
-      checkTimeoutInterval: 120000,
-
-      hideErrors: false
-    })
-
-  } catch (err) {
-
-    isConnecting = false
-
-    botStatus = 'Lỗi tạo bot'
-
-    addLog(`❌ Không thể tạo bot: ${err.message}`)
-
-    scheduleReconnect(
-      '❌ Không tạo được kết nối Minecraft.'
-    )
-
-    return
-  }
-
-  botInstance = bot
-
-  let loginFlowStarted = false
-  let destroyed = false
-
-  // ====================================================
-  // RESOURCE PACK
-  // ====================================================
-
-  bot.on('resourcePack', () => {
-
-    addLog(
-      '📦 Server yêu cầu Resource Pack.'
-    )
-
-    try {
-
-      if (typeof bot.acceptResourcePack === 'function') {
-        bot.acceptResourcePack()
-
-        addLog(
-          '✅ Đã chấp nhận Resource Pack.'
-        )
-      }
-
-    } catch (err) {
-
-      addLog(
-        `❌ Resource Pack lỗi: ${err.message}`
-      )
-    }
-  })
-
-  // ====================================================
-  // WINDOW
-  // ====================================================
-
-  bot.on('windowOpen', window => {
-
-    let title = 'Kho'
-
-    try {
-
-      if (window && window.title) {
-
-        if (typeof window.title === 'string') {
-
-          try {
-            const parsed = JSON.parse(window.title)
-
-            title =
-              parsed.text ||
-              parsed.translate ||
-              window.title
-
-          } catch {
-            title = window.title
-          }
-
-        } else {
-          title = String(window.title)
-        }
-      }
-
-    } catch {
-      title = 'Kho'
-    }
-
-    addLog(`📦 Đã mở giao diện: ${title}`)
-
-    try {
-
-      const items = window
-        .containerItems()
-        .map(item => ({
-          name: item.displayName || item.name,
-          count: item.count,
-          slot: item.slot
-        }))
-
-      currentVault = {
-        title,
-        items
-      }
-
-    } catch (err) {
-
-      addLog(
-        `⚠️ Không đọc được kho: ${err.message}`
-      )
-    }
-  })
-
-  // ====================================================
-  // SPAWN
-  // ====================================================
-
-  bot.on('spawn', () => {
-
-    if (generation !== connectionGeneration) {
-      return
-    }
-
-    isConnecting = false
-    isOnline = true
-    manualStop = false
-
-    botStatus = 'Đang hoạt động (Online)'
-
-    startTime = Date.now()
-
-    addLog(
-      `✅ Bot ${BOT_USERNAME} đã vào server!`
-    )
-
-    if (!loginFlowStarted) {
-
-      loginFlowStarted = true
-
-      setTimeout(() => {
-
-        if (
-          bot !== botInstance ||
-          !isOnline
-        ) {
-          return
-        }
-
-        safeChat(bot, LOGIN_COMMAND)
-
-        setTimeout(() => {
-
-          if (
-            bot !== botInstance ||
-            !isOnline
-          ) {
-            return
-          }
-
-          safeChat(bot, HOME_COMMAND)
-
-          addLog(
-            `📍 Đã thực hiện: ${HOME_COMMAND}`
-          )
-
-          startAFK(bot)
-
-        }, COMMAND_DELAY)
-
-      }, LOGIN_DELAY)
-
-    } else {
-
-      startAFK(bot)
-
-    }
-  })
-
-  // ====================================================
-  // DEATH
-  // ====================================================
-
-  bot.on('death', () => {
-
-    if (
-      bot !== botInstance ||
-      !isOnline
-    ) {
-      return
-    }
-
-    stopAFK()
-
-    addLog(
-      '☠️ Bot đã chết. Đang hồi sinh...'
-    )
-
-    try {
-      bot.respawn()
-    } catch (err) {
-      addLog(
-        `❌ Respawn lỗi: ${err.message}`
-      )
-      return
-    }
-
-    setTimeout(() => {
-
-      if (
-        bot !== botInstance ||
-        !isOnline
-      ) {
-        return
-      }
-
-      safeChat(bot, HOME_COMMAND)
-
-      addLog(
-        `📍 Đã thực hiện lại: ${HOME_COMMAND}`
-      )
-
-      startAFK(bot)
-
-    }, 3000)
-  })
-
-  // ====================================================
-  // CHAT / MESSAGE
-  // ====================================================
-
-  bot.on('message', message => {
-
-    const text = message
-      .toString()
-      .trim()
-
-    if (!text) return
-
-    if (containsSensitiveData(text)) {
-
-      addLog(
-        '[Server]: [Thông tin bảo mật đã được ẩn]'
-      )
-
-      return
-    }
-
-    console.log(`[Server] ${text}`)
-    addLog(`[Server]: ${text}`)
-  })
-
-  // ====================================================
-  // KICK
-  // ====================================================
-
-  bot.on('kicked', reason => {
-
-    if (destroyed) return
-
-    const text =
-      typeof reason === 'string'
-        ? reason
-        : JSON.stringify(reason)
-
-    isOnline = false
-    isConnecting = false
-
-    stopAFK()
-
-    addLog(
-      `⚠️ Bot bị kick: ${containsSensitiveData(text)
-        ? '[Đã ẩn]'
-        : text}`
-    )
-
-    if (!manualStop && !restartInProgress) {
-      scheduleReconnect(
-        'Bot bị kick khỏi server.'
-      )
-    }
-  })
-
-  // ====================================================
-  // ERROR
-  // ====================================================
-
-  bot.on('error', err => {
-
-    if (destroyed) return
-
-    isOnline = false
-    isConnecting = false
-
-    stopAFK()
-
-    addLog(
-      `❌ Lỗi Minecraft: ${err.message}`
-    )
-
-    if (!manualStop && !restartInProgress) {
-      scheduleReconnect(
-        'Lỗi kết nối Minecraft.'
-      )
-    }
-  })
-
-  // ====================================================
-  // END
-  // ====================================================
-
-  bot.on('end', () => {
-
-    if (destroyed) return
-
-    destroyed = true
-
-    isOnline = false
-    isConnecting = false
-
-    stopAFK()
-
-    // Chỉ xử lý bot hiện tại
-    if (bot === botInstance) {
-      botInstance = null
-    }
-
-    addLog('🔌 Bot đã thoát khỏi server.')
-
-    if (
-      !manualStop &&
-      !restartInProgress
-    ) {
-
-      scheduleReconnect(
-        'Bot mất kết nối.'
-      )
-    }
-  })
-}
-
-// ======================================================
-// HTTP HELPERS
-// ======================================================
-
-function sendJSON(res, status, data) {
-
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store'
-  })
-
-  res.end(JSON.stringify(data))
+  res.end(
+    JSON.stringify(data)
+  )
 }
 
 function readJSON(req) {
+  return new Promise(
+    (resolve, reject) => {
+      let body = ''
 
-  return new Promise((resolve, reject) => {
+      req.on(
+        'data',
+        chunk => {
+          body += chunk.toString()
 
-    let body = ''
+          if (
+            body.length >
+            1024 * 1024
+          ) {
+            reject(
+              new Error(
+                'Request quá lớn'
+              )
+            )
 
-    req.on('data', chunk => {
+            req.destroy()
+          }
+        }
+      )
 
-      body += chunk.toString()
+      req.on(
+        'end',
+        () => {
+          try {
+            resolve(
+              body
+                ? JSON.parse(body)
+                : {}
+            )
+          } catch {
+            reject(
+              new Error(
+                'JSON không hợp lệ'
+              )
+            )
+          }
+        }
+      )
 
-      // chống body quá lớn
-      if (body.length > 1024 * 1024) {
-        reject(
-          new Error('Request quá lớn')
-        )
-
-        req.destroy()
-      }
-    })
-
-    req.on('end', () => {
-
-      try {
-
-        resolve(
-          body ? JSON.parse(body) : {}
-        )
-
-      } catch (err) {
-
-        reject(err)
-      }
-    })
-
-    req.on('error', reject)
-  })
+      req.on(
+        'error',
+        reject
+      )
+    }
+  )
 }
 
-function authenticate(clientIP, password) {
+// ============================================================
+// AUTH
+// ============================================================
 
-  if (authenticatedIPs.has(clientIP)) {
+function authenticate(req, data) {
+  const clientIP =
+    getClientIP(req)
+
+  if (
+    authenticatedIPs.has(clientIP)
+  ) {
     return true
   }
 
-  if (
-    typeof password === 'string' &&
-    password === WEB_PASSWORD
-  ) {
+  if (!WEB_PASSWORD) {
+    return false
+  }
 
-    authenticatedIPs.add(clientIP)
+  if (
+    typeof data.password ===
+      'string' &&
+    data.password ===
+      WEB_PASSWORD
+  ) {
+    authenticatedIPs.add(
+      clientIP
+    )
 
     return true
   }
@@ -752,322 +399,492 @@ function authenticate(clientIP, password) {
   return false
 }
 
-// ======================================================
+// ============================================================
 // WEB SERVER
-// ======================================================
+// ============================================================
 
 function startWebServer(port) {
+  const server =
+    http.createServer(
+      async (req, res) => {
 
-  const server = http.createServer(
-    async (req, res) => {
-
-      const parsedUrl =
-        url.parse(req.url, true)
-
-      const clientIP =
-        getClientIP(req)
-
-      // ================================================
-      // AUTH
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/check-auth' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          isAuth: authenticatedIPs.has(clientIP)
-        })
-      }
-
-      // ================================================
-      // STATUS
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/status' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          status: botStatus,
-          online: isOnline,
-          connecting: isConnecting,
-          username: BOT_USERNAME,
-          host: SERVER_HOST,
-          port: SERVER_PORT,
-          version: MC_VERSION,
-          uptime: getUptime()
-        })
-      }
-
-      // ================================================
-      // INVENTORY
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/get-inventory' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          items: getInventoryItems(),
-          vault: currentVault,
-          heldItem:
-            botInstance?.heldItem
-              ? (
-                botInstance.heldItem.displayName ||
-                botInstance.heldItem.name
-              )
-              : 'Tay không'
-        })
-      }
-
-      // ================================================
-      // LOGS
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/logs' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          logs
-        })
-      }
-
-      // ================================================
-      // SEND CHAT
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/send-chat' &&
-        req.method === 'POST'
-      ) {
-
-        try {
-
-          const data = await readJSON(req)
-
-          if (
-            !authenticate(
-              clientIP,
-              data.password
-            )
-          ) {
-
-            return sendJSON(res, 401, {
-              success: false,
-              message: 'Sai mật khẩu xác thực!'
-            })
-          }
-
-          if (
-            !isOnline ||
-            !botInstance
-          ) {
-
-            return sendJSON(res, 400, {
-              success: false,
-              message: 'Bot chưa vào game!'
-            })
-          }
-
-          const message =
-            typeof data.message === 'string'
-              ? data.message.trim()
-              : ''
-
-          if (!message) {
-
-            return sendJSON(res, 400, {
-              success: false,
-              message: 'Tin nhắn trống!'
-            })
-          }
-
-          safeChat(
-            botInstance,
-            message
+        const parsedUrl =
+          url.parse(
+            req.url,
+            true
           )
 
-          return sendJSON(res, 200, {
-            success: true,
-            message: 'Đã gửi thành công!',
-            isAuth: true
-          })
+        const pathname =
+          parsedUrl.pathname
 
-        } catch (err) {
+        // ====================================================
+        // HEALTH
+        // ====================================================
 
-          return sendJSON(res, 400, {
-            success: false,
-            message: 'Lỗi dữ liệu!'
-          })
+        if (
+          pathname === '/health' &&
+          req.method === 'GET'
+        ) {
+          return sendJSON(
+            res,
+            200,
+            {
+              success: true,
+              status: 'online',
+              botOnline: isOnline,
+              botStatus,
+              uptime: getUptime()
+            }
+          )
         }
-      }
 
-      // ================================================
-      // STOP BOT
-      // ================================================
+        // ====================================================
+        // AUTH
+        // ====================================================
 
-      if (
-        parsedUrl.pathname === '/stop-bot' &&
-        req.method === 'POST'
-      ) {
+        if (
+          pathname === '/check-auth' &&
+          req.method === 'GET'
+        ) {
+          const clientIP =
+            getClientIP(req)
 
-        try {
+          return sendJSON(
+            res,
+            200,
+            {
+              isAuth:
+                authenticatedIPs.has(
+                  clientIP
+                )
+            }
+          )
+        }
 
-          const data = await readJSON(req)
+        // ====================================================
+        // STATUS
+        // ====================================================
 
-          if (
-            !authenticate(
-              clientIP,
-              data.password
+        if (
+          pathname === '/status' &&
+          req.method === 'GET'
+        ) {
+          return sendJSON(
+            res,
+            200,
+            {
+              success: true,
+              status: botStatus,
+              online: isOnline,
+              username:
+                BOT_USERNAME,
+              host:
+                SERVER_HOST,
+              port:
+                SERVER_PORT,
+              version:
+                MC_VERSION,
+              uptime:
+                getUptime()
+            }
+          )
+        }
+
+        // ====================================================
+        // INVENTORY
+        // ====================================================
+
+        if (
+          pathname ===
+            '/get-inventory' &&
+          req.method === 'GET'
+        ) {
+          return sendJSON(
+            res,
+            200,
+            {
+              success: true,
+              items:
+                getInventoryItems(),
+
+              vault:
+                currentVault,
+
+              heldItem:
+                botInstance &&
+                botInstance.heldItem
+                  ? (
+                      botInstance
+                        .heldItem
+                        .displayName ||
+                      botInstance
+                        .heldItem
+                        .name
+                    )
+                  : 'Tay không'
+            }
+          )
+        }
+
+        // ====================================================
+        // SEND CHAT
+        // ====================================================
+
+        if (
+          pathname === '/send-chat' &&
+          req.method === 'POST'
+        ) {
+          try {
+            const data =
+              await readJSON(req)
+
+            if (
+              !authenticate(
+                req,
+                data
+              )
+            ) {
+              return sendJSON(
+                res,
+                401,
+                {
+                  success: false,
+                  message:
+                    'Sai mật khẩu xác thực!'
+                }
+              )
+            }
+
+            if (
+              !isOnline ||
+              !botInstance
+            ) {
+              return sendJSON(
+                res,
+                400,
+                {
+                  success: false,
+                  message:
+                    'Bot chưa vào game!'
+                }
+              )
+            }
+
+            const message =
+              typeof data.message ===
+                'string'
+                ? data.message.trim()
+                : ''
+
+            if (!message) {
+              return sendJSON(
+                res,
+                400,
+                {
+                  success: false,
+                  message:
+                    'Tin nhắn trống!'
+                }
+              )
+            }
+
+            if (
+              message.length > 500
+            ) {
+              return sendJSON(
+                res,
+                400,
+                {
+                  success: false,
+                  message:
+                    'Tin nhắn quá dài!'
+                }
+              )
+            }
+
+            safeChat(
+              botInstance,
+              message
             )
-          ) {
 
-            return sendJSON(res, 401, {
-              success: false,
-              message: 'Sai mật khẩu xác thực!'
-            })
+            return sendJSON(
+              res,
+              200,
+              {
+                success: true,
+                message:
+                  'Đã gửi thành công!',
+                isAuth: true
+              }
+            )
+
+          } catch (error) {
+            return sendJSON(
+              res,
+              400,
+              {
+                success: false,
+                message:
+                  error.message
+              }
+            )
           }
+        }
 
-          manualStop = true
-          restartInProgress = false
+        // ====================================================
+        // STOP
+        // ====================================================
 
-          stopAllModes()
+        if (
+          pathname === '/stop-bot' &&
+          req.method === 'POST'
+        ) {
+          try {
+            const data =
+              await readJSON(req)
 
-          isOnline = false
-          isConnecting = false
+            if (
+              !authenticate(
+                req,
+                data
+              )
+            ) {
+              return sendJSON(
+                res,
+                401,
+                {
+                  success: false,
+                  message:
+                    'Sai mật khẩu xác thực!'
+                }
+              )
+            }
 
-          botStatus =
-            'Đã dừng thủ công (Offline)'
+            if (!botInstance) {
+              return sendJSON(
+                res,
+                400,
+                {
+                  success: false,
+                  message:
+                    'Bot đã dừng.'
+                }
+              )
+            }
 
-          if (botInstance) {
+            manualStop = true
+            isConnecting = false
 
-            const oldBot = botInstance
+            stopAllModes()
+
+            const bot =
+              botInstance
+
+            botStatus =
+              'Đang dừng bot...'
+
+            isOnline = false
+
+            try {
+              bot.quit(
+                'Bot stopped from dashboard'
+              )
+            } catch {}
 
             botInstance = null
 
-            try {
-              oldBot.quit(
-                'Được tắt bởi Admin'
-              )
-            } catch {}
-
-            try {
-              oldBot.end()
-            } catch {}
-          }
-
-          addLog(
-            '🛑 Bot đã được tắt bởi Admin.'
-          )
-
-          return sendJSON(res, 200, {
-            success: true,
-            message: 'Đã tắt bot thành công!',
-            isAuth: true
-          })
-
-        } catch {
-
-          return sendJSON(res, 400, {
-            success: false,
-            message: 'Lỗi dữ liệu!'
-          })
-        }
-      }
-
-      // ================================================
-      // RESTART
-      // ================================================
-
-      if (
-        parsedUrl.pathname === '/restart' &&
-        req.method === 'POST'
-      ) {
-
-        if (restartInProgress) {
-
-          return sendJSON(res, 400, {
-            success: false,
-            message: 'Bot đang restart, vui lòng chờ!'
-          })
-        }
-
-        restartInProgress = true
-        manualStop = false
-
-        stopAllModes()
-
-        isOnline = false
-        isConnecting = false
-
-        botStatus =
-          'Đang khởi động lại...'
-
-        addLog(
-          '🔄 Yêu cầu khởi động lại bot từ Web Dashboard...'
-        )
-
-        const oldBot = botInstance
-
-        botInstance = null
-
-        if (oldBot) {
-
-          try {
-            oldBot.removeAllListeners()
-          } catch {}
-
-          try {
-            oldBot.quit(
-              'Restart Bot'
-            )
-          } catch {}
-
-          try {
-            oldBot.end()
-          } catch {}
-        }
-
-        setTimeout(() => {
-
-          restartInProgress = false
-
-          if (!manualStop) {
+            botStatus =
+              'Đã dừng thủ công (Offline)'
 
             addLog(
-              '🚀 Bắt đầu bot mới...'
+              '🛑 Bot đã được tắt từ Dashboard.'
             )
 
-            createBotInstance()
+            return sendJSON(
+              res,
+              200,
+              {
+                success: true,
+                message:
+                  'Đã tắt bot thành công!',
+                isAuth: true
+              }
+            )
+
+          } catch (error) {
+            return sendJSON(
+              res,
+              400,
+              {
+                success: false,
+                message:
+                  error.message
+              }
+            )
           }
+        }
 
-        }, 2500)
+        // ====================================================
+        // RESTART
+        // ====================================================
 
-        return sendJSON(res, 200, {
-          success: true,
-          message: 'Đang khởi động lại bot...'
-        })
-      }
+        if (
+          pathname === '/restart' &&
+          req.method === 'POST'
+        ) {
+          try {
+            const data =
+              await readJSON(req)
 
-      // ==================================================
-      // DASHBOARD
-      // ==================================================
+            if (
+              !authenticate(
+                req,
+                data
+              )
+            ) {
+              return sendJSON(
+                res,
+                401,
+                {
+                  success: false,
+                  message:
+                    'Sai mật khẩu xác thực!'
+                }
+              )
+            }
 
-      res.writeHead(200, {
-        'Content-Type':
-          'text/html; charset=utf-8'
-      })
+            if (isConnecting) {
+              return sendJSON(
+                res,
+                400,
+                {
+                  success: false,
+                  message:
+                    'Bot đang kết nối, hãy chờ một chút.'
+                }
+              )
+            }
 
-      res.end(`
+            addLog(
+              '🔄 Yêu cầu restart bot.'
+            )
+
+            manualStop = false
+
+            stopAllModes()
+
+            if (botInstance) {
+              try {
+                botInstance.end()
+              } catch {}
+
+              botInstance = null
+            }
+
+            isOnline = false
+
+            botStatus =
+              'Đang chuẩn bị restart...'
+
+            setTimeout(
+              () => {
+                createBotInstance()
+              },
+              1500
+            )
+
+            return sendJSON(
+              res,
+              200,
+              {
+                success: true,
+                message:
+                  'Đang khởi động lại bot...'
+              }
+            )
+
+          } catch (error) {
+            return sendJSON(
+              res,
+              400,
+              {
+                success: false,
+                message:
+                  error.message
+              }
+            )
+          }
+        }
+
+        // ====================================================
+        // FAVICON
+        // ====================================================
+
+        if (
+          pathname ===
+          '/favicon.ico'
+        ) {
+          res.writeHead(204)
+          return res.end()
+        }
+
+        // ====================================================
+        // DASHBOARD
+        // ====================================================
+
+        const safeStatus =
+          escapeHTML(
+            botStatus
+          )
+
+        const safeUsername =
+          escapeHTML(
+            BOT_USERNAME
+          )
+
+        const safeHost =
+          escapeHTML(
+            SERVER_HOST
+          )
+
+        const safeVersion =
+          escapeHTML(
+            MC_VERSION
+          )
+
+        const onlineColor =
+          isOnline
+            ? '#4ade80'
+            : '#f87171'
+
+        const onlineBackground =
+          isOnline
+            ? 'rgba(34,197,94,.1)'
+            : 'rgba(239,68,68,.1)'
+
+        const renderedLogs =
+          logs
+            .map(log => {
+              return (
+                '<div class="log">' +
+                escapeHTML(log) +
+                '</div>'
+              )
+            })
+            .join('')
+
+        res.writeHead(
+          200,
+          {
+            'Content-Type':
+              'text/html; charset=utf-8',
+
+            'Cache-Control':
+              'no-store'
+          }
+        )
+
+        res.end(`
 <!DOCTYPE html>
 <html lang="vi">
 
@@ -1076,129 +893,225 @@ function startWebServer(port) {
 <meta charset="UTF-8">
 
 <meta
-name="viewport"
-content="width=device-width,initial-scale=1.0"
+  name="viewport"
+  content="width=device-width,initial-scale=1.0"
 >
 
-<title>Bot 2 Dashboard</title>
+<title>AFK Bot Dashboard</title>
 
 <style>
 
 * {
   box-sizing: border-box;
-  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
-  min-height: 100vh;
   background: #0f172a;
   color: #f8fafc;
+  font-family: Arial, Helvetica, sans-serif;
+
+  min-height: 100vh;
+
   display: flex;
   justify-content: center;
+  align-items: center;
+
   padding: 20px;
 }
 
 .card {
   width: 100%;
-  max-width: 600px;
+  max-width: 620px;
+
   background: #1e293b;
+
   border: 1px solid #334155;
-  border-radius: 16px;
-  padding: 22px;
+  border-radius: 18px;
+
+  padding: 24px;
+
+  box-shadow:
+    0 20px 40px rgba(0,0,0,.35);
 }
 
 .title {
   text-align: center;
-  font-size: 23px;
-  font-weight: bold;
+
   color: #38bdf8;
-  margin-bottom: 12px;
+
+  font-size: 24px;
+  font-weight: 800;
+
+  margin-bottom: 14px;
 }
 
 .badge {
-  text-align: center;
-  margin-bottom: 15px;
-  color: ${isOnline ? '#4ade80' : '#f87171'};
-  font-weight: bold;
+  display: block;
+
+  width: fit-content;
+
+  margin: 0 auto 18px;
+
+  padding: 7px 14px;
+
+  border-radius: 20px;
+
+  font-size: 13px;
+  font-weight: 700;
+
+  color: ${onlineColor};
+  background: ${onlineBackground};
+}
+
+.info-grid {
+  display: grid;
+
+  grid-template-columns:
+    repeat(2, 1fr);
+
+  gap: 8px;
 }
 
 .info {
   background: #0f172a;
-  padding: 11px;
-  border-radius: 9px;
-  margin-bottom: 8px;
+
+  border-radius: 10px;
+
+  padding: 12px;
 }
 
 .label {
-  color: #94a3b8;
-  font-size: 11px;
+  color: #64748b;
+
+  font-size: 10px;
+  font-weight: 700;
+
   text-transform: uppercase;
 }
 
 .value {
-  margin-top: 4px;
-  font-weight: bold;
+  margin-top: 5px;
+
+  color: #e2e8f0;
+
+  font-size: 13px;
+  font-weight: 700;
+
+  word-break: break-word;
 }
 
 .section {
   color: #38bdf8;
-  font-weight: bold;
+
   font-size: 12px;
-  margin-top: 16px;
-  margin-bottom: 7px;
+  font-weight: 800;
+
+  margin: 18px 0 7px;
 }
 
-.inventory {
+.table-wrap {
   max-height: 180px;
+
   overflow-y: auto;
+
   background: #0f172a;
-  border-radius: 8px;
+
+  border: 1px solid #334155;
+
+  border-radius: 10px;
 }
 
 table {
   width: 100%;
+
   border-collapse: collapse;
+
   font-size: 12px;
 }
 
 th,
 td {
-  padding: 9px;
-  border-bottom: 1px solid #1e293b;
+  padding: 9px 10px;
+
   text-align: left;
+
+  border-bottom: 1px solid #1e293b;
 }
 
 th {
-  color: #38bdf8;
   position: sticky;
   top: 0;
+
   background: #1e293b;
+
+  color: #38bdf8;
+}
+
+td {
+  color: #cbd5e1;
+}
+
+.empty {
+  padding: 18px;
+
+  text-align: center;
+
+  color: #64748b;
 }
 
 input {
   width: 100%;
+
   padding: 11px;
-  margin-top: 6px;
-  border-radius: 8px;
-  border: 1px solid #334155;
+
+  margin-bottom: 8px;
+
   background: #0f172a;
+
   color: white;
+
+  border: 1px solid #334155;
+
+  border-radius: 9px;
+
   outline: none;
+}
+
+input:focus {
+  border-color: #38bdf8;
 }
 
 button {
   width: 100%;
-  border: 0;
+
   padding: 11px;
+
+  border: 0;
+
   border-radius: 9px;
-  margin-top: 8px;
-  font-weight: bold;
+
+  font-weight: 800;
+
   cursor: pointer;
 }
 
 .send {
   background: #38bdf8;
+  color: #082f49;
+}
+
+.buttons {
+  display: flex;
+
+  gap: 10px;
+
+  margin-top: 15px;
+}
+
+.buttons button {
+  flex: 1;
 }
 
 .stop {
@@ -1212,18 +1125,51 @@ button {
 }
 
 .logs {
-  background: #090d16;
-  border-radius: 8px;
-  padding: 10px;
-  height: 160px;
+  height: 170px;
+
   overflow-y: auto;
+
+  padding: 10px;
+
+  background: #090d16;
+
+  border: 1px solid #1e293b;
+
+  border-radius: 10px;
+
+  color: #a7f3d0;
+
   font-family: monospace;
+
   font-size: 11px;
 }
 
 .log {
   margin-bottom: 5px;
+
   word-break: break-word;
+}
+
+.footer {
+  margin-top: 14px;
+
+  color: #64748b;
+
+  text-align: center;
+
+  font-size: 10px;
+}
+
+@media (max-width: 500px) {
+
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .buttons {
+    flex-direction: column;
+  }
+
 }
 
 </style>
@@ -1234,120 +1180,158 @@ button {
 
 <div class="card">
 
-<div class="title">
-🤖 AFK BOT 2
-</div>
+  <div class="title">
+    🤖 AFK Bot Dashboard
+  </div>
 
-<div
-class="badge"
-id="status"
->
-● ${botStatus}
-</div>
+  <div class="badge">
+    ● ${safeStatus}
+  </div>
 
-<div class="info">
-<div class="label">Bot</div>
-<div class="value">${BOT_USERNAME}</div>
-</div>
+  <div class="info-grid">
 
-<div class="info">
-<div class="label">Server</div>
-<div class="value">
-${SERVER_HOST}:${SERVER_PORT}
-</div>
-</div>
+    <div class="info">
 
-<div class="info">
-<div class="label">Phiên bản</div>
-<div class="value">${MC_VERSION}</div>
-</div>
+      <div class="label">
+        Bot
+      </div>
 
-<div class="info">
-<div class="label">Uptime</div>
-<div
-class="value"
-id="uptime"
->
-${getUptime()}
-</div>
-</div>
+      <div class="value">
+        ${safeUsername}
+      </div>
 
-<div class="section">
-🎒 TÚI ĐỒ
-</div>
+    </div>
 
-<div class="inventory">
+    <div class="info">
 
-<table>
+      <div class="label">
+        Server
+      </div>
 
-<thead>
-<tr>
-<th>Slot</th>
-<th>Vật phẩm</th>
-<th>Số lượng</th>
-</tr>
-</thead>
+      <div class="value">
+        ${safeHost}:${SERVER_PORT}
+      </div>
 
-<tbody id="inventory">
-<tr>
-<td colspan="3">
-Đang tải...
-</td>
-</tr>
-</tbody>
+    </div>
 
-</table>
+    <div class="info">
 
-</div>
+      <div class="label">
+        Phiên bản
+      </div>
 
-<div class="section">
-💬 CHAT / LỆNH
-</div>
+      <div class="value">
+        ${safeVersion}
+      </div>
 
-<input
-id="message"
-placeholder="Nhập chat hoặc lệnh..."
->
+    </div>
 
-<input
-id="password"
-type="password"
-placeholder="Mật khẩu web"
->
+    <div class="info">
 
-<button
-class="send"
-onclick="sendChat()"
->
-🚀 Gửi
-</button>
+      <div class="label">
+        Uptime
+      </div>
 
-<div class="section">
-📜 NHẬT KÝ
-</div>
+      <div class="value">
+        ${getUptime()}
+      </div>
 
-<div
-class="logs"
-id="logs"
->
-${logs.map(
-  x => `<div class="log">${x}</div>`
-).join('')}
-</div>
+    </div>
 
-<button
-class="stop"
-onclick="stopBot()"
->
-🛑 Tắt Bot
-</button>
+  </div>
 
-<button
-class="restart"
-onclick="restartBot()"
->
-🔄 Restart Bot
-</button>
+  <div class="section">
+    🎒 TÚI ĐỒ
+  </div>
+
+  <div class="table-wrap">
+
+    <table>
+
+      <thead>
+
+        <tr>
+          <th>Slot</th>
+          <th>Vật phẩm</th>
+          <th>Số lượng</th>
+        </tr>
+
+      </thead>
+
+      <tbody id="invBody">
+
+        <tr>
+          <td
+            colspan="3"
+            class="empty"
+          >
+            Đang tải...
+          </td>
+        </tr>
+
+      </tbody>
+
+    </table>
+
+  </div>
+
+  <div class="section">
+    💬 CHAT / LỆNH
+  </div>
+
+  <input
+    id="chatMsg"
+    type="text"
+    placeholder="Nhập tin nhắn hoặc lệnh..."
+    autocomplete="off"
+  >
+
+  <input
+    id="chatPwd"
+    type="password"
+    placeholder="Mật khẩu Dashboard"
+    autocomplete="off"
+  >
+
+  <button
+    class="send"
+    onclick="sendChat()"
+  >
+    🚀 Gửi
+  </button>
+
+  <div class="section">
+    📜 NHẬT KÝ
+  </div>
+
+  <div
+    class="logs"
+    id="logs"
+  >
+    ${renderedLogs}
+  </div>
+
+  <div class="buttons">
+
+    <button
+      class="stop"
+      onclick="stopBot()"
+    >
+      🛑 Tắt Bot
+    </button>
+
+    <button
+      class="restart"
+      onclick="restartBot()"
+    >
+      🔄 Restart
+    </button>
+
+  </div>
+
+  <div class="footer">
+    AFK Bot • Render
+  </div>
 
 </div>
 
@@ -1359,82 +1343,205 @@ async function checkAuth() {
 
   try {
 
-    const r =
+    const response =
       await fetch('/check-auth')
 
-    const d =
-      await r.json()
+    const data =
+      await response.json()
 
-    authenticated = d.isAuth
+    authenticated =
+      Boolean(data.isAuth)
 
     if (authenticated) {
-      document.getElementById(
-        'password'
-      ).style.display = 'none'
+
+      const passwordInput =
+        document.getElementById(
+          'chatPwd'
+        )
+
+      if (passwordInput) {
+        passwordInput.style.display =
+          'none'
+      }
+
     }
 
   } catch {}
+
+}
+
+async function fetchInventory() {
+
+  try {
+
+    const response =
+      await fetch(
+        '/get-inventory',
+        {
+          cache: 'no-store'
+        }
+      )
+
+    const data =
+      await response.json()
+
+    if (!data.success) {
+      return
+    }
+
+    const tbody =
+      document.getElementById(
+        'invBody'
+      )
+
+    if (!data.items.length) {
+
+      tbody.innerHTML =
+        '<tr>' +
+        '<td colspan="3" class="empty">' +
+        'Túi đồ trống' +
+        '</td>' +
+        '</tr>'
+
+      return
+    }
+
+    tbody.innerHTML =
+      data.items
+        .map(item => {
+
+          const name =
+            String(
+              item.name
+            )
+              .replace(
+                /&/g,
+                '&amp;'
+              )
+              .replace(
+                /</g,
+                '&lt;'
+              )
+              .replace(
+                />/g,
+                '&gt;'
+              )
+
+          return (
+            '<tr>' +
+              '<td>' +
+                String(item.slot) +
+              '</td>' +
+
+              '<td>' +
+                name +
+              '</td>' +
+
+              '<td>' +
+                'x' +
+                String(item.count) +
+              '</td>' +
+
+            '</tr>'
+          )
+
+        })
+        .join('')
+
+  } catch {}
+
 }
 
 async function sendChat() {
 
   const message =
-    document.getElementById(
-      'message'
-    ).value.trim()
+    document
+      .getElementById(
+        'chatMsg'
+      )
+      .value
+      .trim()
 
   const password =
-    document.getElementById(
-      'password'
-    ).value
+    document
+      .getElementById(
+        'chatPwd'
+      )
+      .value
 
   if (!message) {
-    alert('Nhập tin nhắn!')
+
+    alert(
+      'Vui lòng nhập tin nhắn!'
+    )
+
     return
   }
 
-  if (!authenticated && !password) {
-    alert('Nhập mật khẩu!')
+  if (
+    !authenticated &&
+    !password
+  ) {
+
+    alert(
+      'Vui lòng nhập mật khẩu Dashboard!'
+    )
+
     return
   }
 
   try {
 
-    const r =
-      await fetch('/send-chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-        body: JSON.stringify({
-          message,
-          password
-        })
-      })
+    const response =
+      await fetch(
+        '/send-chat',
+        {
+          method: 'POST',
 
-    const d =
-      await r.json()
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
 
-    alert(d.message)
+          body:
+            JSON.stringify({
+              message,
+              password
+            })
+        }
+      )
 
-    if (d.success) {
+    const data =
+      await response.json()
 
-      document.getElementById(
-        'message'
-      ).value = ''
+    alert(data.message)
+
+    if (data.success) {
 
       authenticated = true
 
-      document.getElementById(
-        'password'
-      ).style.display = 'none'
+      document
+        .getElementById(
+          'chatMsg'
+        )
+        .value = ''
+
+      document
+        .getElementById(
+          'chatPwd'
+        )
+        .style.display =
+          'none'
     }
 
   } catch {
 
-    alert('Không kết nối được dashboard!')
+    alert(
+      'Không thể kết nối Dashboard.'
+    )
+
   }
+
 }
 
 async function stopBot() {
@@ -1448,178 +1555,111 @@ async function stopBot() {
   }
 
   const password =
-    document.getElementById(
-      'password'
-    ).value
+    document
+      .getElementById(
+        'chatPwd'
+      )
+      .value
 
   try {
 
-    const r =
-      await fetch('/stop-bot', {
-        method: 'POST',
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-        body: JSON.stringify({
-          password
-        })
-      })
+    const response =
+      await fetch(
+        '/stop-bot',
+        {
+          method: 'POST',
 
-    const d =
-      await r.json()
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
 
-    alert(d.message)
+          body:
+            JSON.stringify({
+              password
+            })
+        }
+      )
+
+    const data =
+      await response.json()
+
+    alert(data.message)
 
     setTimeout(
-      () => location.reload(),
-      500
+      () => {
+        location.reload()
+      },
+      1000
     )
 
   } catch {
 
-    alert('Lỗi kết nối!')
+    alert(
+      'Không thể kết nối Dashboard.'
+    )
+
   }
+
 }
 
 async function restartBot() {
 
   try {
 
-    const r =
-      await fetch('/restart', {
-        method: 'POST'
-      })
+    const response =
+      await fetch(
+        '/restart',
+        {
+          method: 'POST',
 
-    const d =
-      await r.json()
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
 
-    alert(d.message)
+          body:
+            JSON.stringify({})
+        }
+      )
+
+    const data =
+      await response.json()
+
+    alert(data.message)
 
     setTimeout(
-      () => location.reload(),
-      2500
+      () => {
+        location.reload()
+      },
+      1500
     )
 
   } catch {
 
-    alert('Lỗi restart!')
+    alert(
+      'Không thể kết nối Dashboard.'
+    )
+
   }
+
 }
 
-async function updateStatus() {
+window.addEventListener(
+  'load',
+  () => {
 
-  try {
+    checkAuth()
 
-    const r =
-      await fetch('/status')
+    fetchInventory()
 
-    const d =
-      await r.json()
+    setInterval(
+      fetchInventory,
+      5000
+    )
 
-    document.getElementById(
-      'status'
-    ).innerText =
-      '● ' + d.status
-
-    document.getElementById(
-      'uptime'
-    ).innerText =
-      d.uptime
-
-  } catch {}
-}
-
-async function updateInventory() {
-
-  try {
-
-    const r =
-      await fetch('/get-inventory')
-
-    const d =
-      await r.json()
-
-    if (!d.success) return
-
-    const tbody =
-      document.getElementById(
-        'inventory'
-      )
-
-    if (!d.items.length) {
-
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3">
-            Túi đồ trống
-          </td>
-        </tr>
-      `
-
-      return
-    }
-
-    tbody.innerHTML =
-      d.items.map(item => `
-        <tr>
-          <td>${item.slot}</td>
-          <td>${item.name}</td>
-          <td>x${item.count}</td>
-        </tr>
-      `).join('')
-
-  } catch {}
-}
-
-async function updateLogs() {
-
-  try {
-
-    const r =
-      await fetch('/logs')
-
-    const d =
-      await r.json()
-
-    if (!d.success) return
-
-    document.getElementById(
-      'logs'
-    ).innerHTML =
-      d.logs.map(
-        x =>
-          '<div class="log">' +
-          x.replace(
-            /</g,
-            '&lt;'
-          ) +
-          '</div>'
-      ).join('')
-
-  } catch {}
-}
-
-checkAuth()
-
-setInterval(
-  updateStatus,
-  2000
+  }
 )
-
-setInterval(
-  updateInventory,
-  3000
-)
-
-setInterval(
-  updateLogs,
-  2000
-)
-
-updateStatus()
-updateInventory()
-updateLogs()
 
 </script>
 
@@ -1627,73 +1667,764 @@ updateLogs()
 
 </html>
 `)
-    }
-  )
+      }
+    )
 
   server.listen(
     port,
     '0.0.0.0',
     () => {
+
       console.log(
-        `[Web] Dashboard chạy tại port ${port}`
+        `[Web Server] Đã mở port ${port}`
       )
 
       console.log(
-        `[Minecraft] ${SERVER_HOST}:${SERVER_PORT}`
+        `[Web Server] Dashboard: http://0.0.0.0:${port}`
       )
+
     }
   )
 
   server.on(
     'error',
-    err => {
+    error => {
 
       console.error(
         '[Web Server Error]',
-        err
+        error
       )
+
+    }
+  )
+
+  return server
+}
+
+// ============================================================
+// RECONNECT
+// ============================================================
+
+function scheduleReconnect() {
+
+  if (manualStop) {
+    return
+  }
+
+  if (reconnectTimeout) {
+    return
+  }
+
+  const delay = 15000
+
+  botStatus =
+    'Offline — thử lại sau 15 giây'
+
+  addLog(
+    '⏳ Tự động kết nối lại sau 15 giây...'
+  )
+
+  reconnectTimeout =
+    setTimeout(
+      () => {
+
+        reconnectTimeout = null
+
+        if (
+          manualStop ||
+          isOnline ||
+          isConnecting
+        ) {
+          return
+        }
+
+        addLog(
+          '🔄 Bắt đầu kết nối lại...'
+        )
+
+        createBotInstance()
+
+      },
+      delay
+    )
+}
+
+// ============================================================
+// CREATE BOT
+// ============================================================
+
+function createBotInstance() {
+
+  if (isConnecting) {
+
+    addLog(
+      'Đã có một kết nối đang chạy.'
+    )
+
+    return
+  }
+
+  manualStop = false
+  isConnecting = true
+
+  stopAllModes()
+
+  if (botInstance) {
+
+    try {
+      botInstance.end()
+    } catch {}
+
+    botInstance = null
+  }
+
+  isOnline = false
+
+  botStatus =
+    'Đang kết nối server Minecraft...'
+
+  addLog(
+    `Đang kết nối ${SERVER_HOST}:${SERVER_PORT}...`
+  )
+
+  let bot
+
+  try {
+
+    bot =
+      mineflayer.createBot({
+
+        host:
+          SERVER_HOST,
+
+        port:
+          SERVER_PORT,
+
+        username:
+          BOT_USERNAME,
+
+        version:
+          MC_VERSION,
+
+        checkTimeoutInterval:
+          120000
+
+      })
+
+  } catch (error) {
+
+    isConnecting = false
+
+    botStatus =
+      'Lỗi tạo kết nối'
+
+    addLog(
+      `Lỗi createBot: ${error.message}`
+    )
+
+    scheduleReconnect()
+
+    return
+  }
+
+  botInstance = bot
+
+  let loginStarted = false
+
+  // ==========================================================
+  // LOGIN
+  // ==========================================================
+
+  bot.once(
+    'login',
+    () => {
+
+      addLog(
+        'Minecraft handshake thành công. Bot đang đăng nhập...'
+      )
+
+    }
+  )
+
+  // ==========================================================
+  // RESOURCE PACK
+  // ==========================================================
+
+  bot.on(
+    'resourcePack',
+    () => {
+
+      addLog(
+        'Server yêu cầu Resource Pack.'
+      )
+
+      try {
+
+        if (
+          typeof bot.acceptResourcePack ===
+          'function'
+        ) {
+
+          bot.acceptResourcePack()
+
+          addLog(
+            '✅ Đã chấp nhận Resource Pack.'
+          )
+
+        }
+
+      } catch (error) {
+
+        addLog(
+          `Lỗi Resource Pack: ${error.message}`
+        )
+
+      }
+
+    }
+  )
+
+  // ==========================================================
+  // SPAWN
+  // ==========================================================
+
+  bot.once(
+    'spawn',
+    () => {
+
+      isConnecting = false
+      isOnline = true
+
+      botStatus =
+        'Đang hoạt động (Online)'
+
+      addLog(
+        `✅ Bot ${BOT_USERNAME} đã vào server!`
+      )
+
+      if (loginStarted) {
+
+        startAFK(bot)
+
+        return
+      }
+
+      loginStarted = true
+
+      // ------------------------------------------------------
+      // LOGIN
+      // ------------------------------------------------------
+
+      if (LOGIN_COMMAND) {
+
+        setTimeout(
+          () => {
+
+            if (
+              botInstance !== bot ||
+              !isOnline
+            ) {
+              return
+            }
+
+            safeChat(
+              bot,
+              LOGIN_COMMAND
+            )
+
+          },
+          3000
+        )
+
+      }
+
+      // ------------------------------------------------------
+      // HOME / SERVER
+      // ------------------------------------------------------
+
+      setTimeout(
+        () => {
+
+          if (
+            botInstance !== bot ||
+            !isOnline
+          ) {
+            return
+          }
+
+          safeChat(
+            bot,
+            HOME_COMMAND
+          )
+
+          setTimeout(
+            () => {
+
+              if (
+                botInstance === bot &&
+                isOnline
+              ) {
+                startAFK(bot)
+              }
+
+            },
+            1500
+          )
+
+        },
+        LOGIN_COMMAND
+          ? 6000
+          : 3000
+      )
+
+    }
+  )
+
+  // ==========================================================
+  // DEATH
+  // ==========================================================
+
+  bot.on(
+    'death',
+    () => {
+
+      addLog(
+        '⚠️ Bot đã chết.'
+      )
+
+      stopAllModes()
+
+      setTimeout(
+        () => {
+
+          if (
+            botInstance !== bot ||
+            !isOnline
+          ) {
+            return
+          }
+
+          try {
+
+            if (
+              typeof bot.respawn ===
+              'function'
+            ) {
+              bot.respawn()
+            }
+
+          } catch {}
+
+          setTimeout(
+            () => {
+
+              if (
+                botInstance !== bot ||
+                !isOnline
+              ) {
+                return
+              }
+
+              safeChat(
+                bot,
+                HOME_COMMAND
+              )
+
+              startAFK(bot)
+
+            },
+            3000
+          )
+
+        },
+        1000
+      )
+
+    }
+  )
+
+  // ==========================================================
+  // WINDOW
+  // ==========================================================
+
+  bot.on(
+    'windowOpen',
+    window => {
+
+      try {
+
+        let title = 'Kho'
+
+        if (window.title) {
+
+          if (
+            typeof window.title ===
+            'string'
+          ) {
+
+            try {
+
+              const parsed =
+                JSON.parse(
+                  window.title
+                )
+
+              if (
+                parsed &&
+                parsed.text
+              ) {
+                title =
+                  parsed.text
+              }
+
+            } catch {
+
+              title =
+                String(
+                  window.title
+                )
+
+            }
+
+          } else {
+
+            title =
+              String(
+                window.title
+              )
+
+          }
+
+        }
+
+        const items =
+          typeof window.containerItems ===
+          'function'
+            ? window.containerItems()
+            : []
+
+        currentVault = {
+
+          title,
+
+          items:
+            items.map(item => ({
+              name:
+                item.displayName ||
+                item.name,
+
+              count:
+                item.count,
+
+              slot:
+                item.slot
+            }))
+
+        }
+
+        addLog(
+          `📦 Đã mở giao diện: ${title}`
+        )
+
+      } catch (error) {
+
+        addLog(
+          `Lỗi đọc cửa sổ: ${error.message}`
+        )
+
+      }
+
+    }
+  )
+
+  // ==========================================================
+  // MESSAGE
+  // ==========================================================
+
+  bot.on(
+    'message',
+    message => {
+
+      try {
+
+        const text =
+          message
+            .toString()
+            .trim()
+
+        if (!text) {
+          return
+        }
+
+        if (
+          containsSensitiveData(text)
+        ) {
+
+          addLog(
+            '[Server]: [Thông tin bảo mật đã ẩn]'
+          )
+
+        } else {
+
+          addLog(
+            `[Server]: ${text}`
+          )
+
+        }
+
+      } catch {}
+
+    }
+  )
+
+  // ==========================================================
+  // KICK
+  // ==========================================================
+
+  bot.on(
+    'kicked',
+    reason => {
+
+      isOnline = false
+      isConnecting = false
+
+      stopAllModes()
+
+      let reasonText = ''
+
+      try {
+
+        reasonText =
+          typeof reason ===
+          'string'
+            ? reason
+            : JSON.stringify(
+                reason
+              )
+
+      } catch {
+
+        reasonText =
+          String(reason)
+
+      }
+
+      botStatus =
+        'Bị đá khỏi server (Offline)'
+
+      addLog(
+        `⚠️ Bot bị kick: ${sanitizeLog(reasonText)}`
+      )
+
+    }
+  )
+
+  // ==========================================================
+  // ERROR
+  // ==========================================================
+
+  bot.on(
+    'error',
+    error => {
+
+      isOnline = false
+      isConnecting = false
+
+      botStatus =
+        'Gặp lỗi kết nối'
+
+      addLog(
+        `❌ Lỗi: ${error.message}`
+      )
+
+      if (error.code) {
+
+        addLog(
+          `Mã lỗi: ${error.code}`
+        )
+
+      }
+
+    }
+  )
+
+  // ==========================================================
+  // END
+  // ==========================================================
+
+  bot.on(
+    'end',
+    reason => {
+
+      isOnline = false
+
+      stopAllModes()
+
+      if (
+        botInstance === bot
+      ) {
+        botInstance = null
+      }
+
+      if (manualStop) {
+
+        isConnecting = false
+
+        botStatus =
+          'Đã dừng thủ công (Offline)'
+
+        addLog(
+          'Bot đã dừng thủ công.'
+        )
+
+        return
+      }
+
+      isConnecting = false
+
+      botStatus =
+        'Mất kết nối — đang thử lại...'
+
+      if (reason) {
+
+        addLog(
+          `Bot mất kết nối: ${sanitizeLog(reason)}`
+        )
+
+      } else {
+
+        addLog(
+          'Bot đã mất kết nối.'
+        )
+
+      }
+
+      scheduleReconnect()
+
     }
   )
 }
 
-// ======================================================
-// START
-// ======================================================
-
-startWebServer(WEB_PORT)
-
-createBotInstance()
-
-// ======================================================
+// ============================================================
 // PROCESS SAFETY
-// ======================================================
+// ============================================================
 
 process.on(
   'uncaughtException',
-  err => {
+  error => {
 
     console.error(
       '[uncaughtException]',
-      err
+      error
     )
 
     addLog(
-      `❌ Lỗi hệ thống: ${err.message}`
+      `Lỗi hệ thống: ${error.message}`
     )
+
   }
 )
 
 process.on(
   'unhandledRejection',
-  err => {
+  reason => {
 
     console.error(
       '[unhandledRejection]',
-      err
+      reason
     )
 
     addLog(
-      `❌ Promise lỗi: ${err?.message || err}`
+      `Promise lỗi: ${String(reason)}`
     )
+
   }
+)
+
+process.on(
+  'SIGTERM',
+  () => {
+
+    console.log(
+      'Nhận SIGTERM — đang đóng bot...'
+    )
+
+    manualStop = true
+
+    stopAllModes()
+
+    if (botInstance) {
+
+      try {
+
+        botInstance.quit(
+          'Render shutting down'
+        )
+
+      } catch {}
+
+    }
+
+    setTimeout(
+      () => {
+        process.exit(0)
+      },
+      1000
+    )
+
+  }
+)
+
+// ============================================================
+// START
+// ============================================================
+
+console.log(
+  '=========================================='
+)
+
+console.log(
+  '          MINECRAFT AFK BOT'
+)
+
+console.log(
+  '=========================================='
+)
+
+console.log(
+  `Minecraft: ${SERVER_HOST}:${SERVER_PORT}`
+)
+
+console.log(
+  `Version: ${MC_VERSION}`
+)
+
+console.log(
+  `Username: ${BOT_USERNAME}`
+)
+
+console.log(
+  `Render PORT: ${WEB_PORT}`
+)
+
+console.log(
+  '=========================================='
+)
+
+// Web server phải chạy trước
+// để Render nhận diện HTTP service.
+
+startWebServer(
+  WEB_PORT
+)
+
+// Khởi động Minecraft sau 1 giây.
+
+setTimeout(
+  () => {
+
+    createBotInstance()
+
+  },
+  1000
 )
