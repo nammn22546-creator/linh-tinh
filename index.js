@@ -2,29 +2,36 @@
 
 const http = require('http')
 const mineflayer = require('mineflayer')
-const url = require('url')
 
 // ============================================================
-// CONFIG
+// CONFIG — BOT 2
 // ============================================================
 
-const SERVER_HOST = process.env.MC_HOST || 'puffernetwork.io.vn'
-const SERVER_PORT = Number(process.env.MC_PORT || 25863)
+const MC_HOST = process.env.MC_HOST || 'puffernetwork.io.vn'
+const MC_PORT = Number(process.env.MC_PORT || 25863)
 
-const BOT_USERNAME = process.env.BOT_USERNAME || 'hellodomcon123'
+const BOT_USERNAME =
+  process.env.BOT_USERNAME || 'hellodomcon123'
 
-// Đặt trong Render → Environment
-// Ví dụ:
+const MC_VERSION =
+  process.env.MC_VERSION || '1.21.11'
+
+// Lệnh đăng nhập server.
+// Render → Environment:
 // MC_LOGIN_COMMAND=/login matkhau
-const LOGIN_COMMAND = process.env.MC_LOGIN_COMMAND || ''
+const LOGIN_COMMAND =
+  process.env.MC_LOGIN_COMMAND || ''
 
-// Không có /server eco
-// Không có /tpa
-const WEB_PASSWORD = process.env.WEB_PASSWORD || ''
+// Sau khi đăng nhập thì bot AFK.
+// Không có /server eco ở BOT 2.
+const HOME_COMMAND =
+  process.env.MC_HOME_COMMAND || ''
 
-const WEB_PORT = Number(process.env.PORT || 10000)
+const WEB_PORT =
+  Number(process.env.PORT || 10000)
 
-const MC_VERSION = process.env.MC_VERSION || '1.21.11'
+const RECONNECT_DELAY = 15000
+const SPAWN_TIMEOUT = 60000
 
 // ============================================================
 // STATE
@@ -32,34 +39,30 @@ const MC_VERSION = process.env.MC_VERSION || '1.21.11'
 
 let botInstance = null
 
-let botStatus = 'Đang khởi động...'
 let isOnline = false
 let isConnecting = false
 let manualStop = false
 
-let afkInterval = null
-let reconnectTimeout = null
+let reconnectTimer = null
+let spawnTimer = null
+let afkTimer = null
+
+let botStatus = 'Đang khởi động...'
 
 let startTime = Date.now()
+
 let logs = []
-
-const authenticatedIPs = new Set()
-
-let currentVault = {
-  title: 'Chưa mở kho nào',
-  items: []
-}
 
 // ============================================================
 // LOG
 // ============================================================
 
-function timeNow() {
-  return new Date().toLocaleTimeString('vi-VN')
-}
-
 function addLog(message) {
-  const line = `[${timeNow()}] ${message}`
+  const time =
+    new Date().toLocaleTimeString('vi-VN')
+
+  const line =
+    `[${time}] ${message}`
 
   logs.unshift(line)
 
@@ -71,87 +74,89 @@ function addLog(message) {
 }
 
 // ============================================================
-// SECURITY
-// ============================================================
-
-function getClientIP(req) {
-  const forwarded = req.headers['x-forwarded-for']
-
-  if (forwarded) {
-    return forwarded.split(',')[0].trim()
-  }
-
-  return req.socket.remoteAddress || 'unknown'
-}
-
-function authenticate(req, data = {}) {
-  const ip = getClientIP(req)
-
-  if (authenticatedIPs.has(ip)) {
-    return true
-  }
-
-  if (
-    WEB_PASSWORD &&
-    typeof data.password === 'string' &&
-    data.password === WEB_PASSWORD
-  ) {
-    authenticatedIPs.add(ip)
-    return true
-  }
-
-  return false
-}
-
-// ============================================================
 // UPTIME
 // ============================================================
 
 function getUptime() {
-  const seconds = Math.floor(
-    (Date.now() - startTime) / 1000
-  )
+  const sec =
+    Math.floor((Date.now() - startTime) / 1000)
 
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
+  const h =
+    Math.floor(sec / 3600)
+
+  const m =
+    Math.floor((sec % 3600) / 60)
+
+  const s =
+    sec % 60
 
   return `${h} giờ ${m} phút ${s} giây`
 }
 
 // ============================================================
-// INVENTORY
+// STOP TIMERS
 // ============================================================
 
-function getInventoryItems() {
-  if (
-    !botInstance ||
-    !isOnline ||
-    !botInstance.inventory
-  ) {
-    return []
+function stopTimers() {
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
   }
 
-  return botInstance.inventory.items().map(item => ({
-    name: item.displayName || item.name,
-    count: item.count,
-    slot: item.slot
-  }))
+  if (spawnTimer) {
+    clearTimeout(spawnTimer)
+    spawnTimer = null
+  }
+
+  if (afkTimer) {
+    clearInterval(afkTimer)
+    afkTimer = null
+  }
 }
 
 // ============================================================
-// TIMER
+// SAFE CHAT
 // ============================================================
 
-function stopAllModes() {
-  if (afkInterval) {
-    clearInterval(afkInterval)
-    afkInterval = null
-  }
+function sendChat(bot, text) {
 
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout)
-    reconnectTimeout = null
+  if (!bot) return false
+
+  if (!text) return false
+
+  try {
+
+    bot.chat(text)
+
+    // Không in mật khẩu/lệnh login ra log
+    if (
+      text.toLowerCase().startsWith('/login') ||
+      text.toLowerCase().startsWith('/register') ||
+      text.toLowerCase().startsWith('/changepassword')
+    ) {
+
+      addLog(
+        '🔐 Đã gửi lệnh đăng nhập.'
+      )
+
+    } else {
+
+      addLog(
+        `💬 Đã gửi: ${text}`
+      )
+
+    }
+
+    return true
+
+  } catch (error) {
+
+    addLog(
+      `❌ Không thể gửi chat: ${error.message}`
+    )
+
+    return false
   }
 }
 
@@ -160,18 +165,19 @@ function stopAllModes() {
 // ============================================================
 
 function startAFK(bot) {
+
   if (!bot) return
 
-  if (afkInterval) {
-    clearInterval(afkInterval)
-    afkInterval = null
+  if (afkTimer) {
+    clearInterval(afkTimer)
+    afkTimer = null
   }
 
-  addLog('🟢 Bắt đầu AFK.')
+  addLog('🟢 Bot đã vào game → bắt đầu AFK.')
 
-  afkInterval = setInterval(() => {
+  afkTimer = setInterval(() => {
+
     if (
-      !bot ||
       botInstance !== bot ||
       !isOnline ||
       !bot.entity
@@ -180,1131 +186,152 @@ function startAFK(bot) {
     }
 
     try {
-      bot.setControlState('jump', true)
+
+      bot.setControlState(
+        'jump',
+        true
+      )
 
       setTimeout(() => {
-        try {
-          if (
-            bot &&
-            botInstance === bot &&
-            typeof bot.setControlState === 'function'
-          ) {
-            bot.setControlState('jump', false)
-          }
-        } catch {}
-      }, 200)
 
-    } catch (error) {
-      addLog(`⚠️ Lỗi AFK: ${error.message}`)
-    }
+        try {
+
+          if (
+            botInstance === bot &&
+            isOnline
+          ) {
+
+            bot.setControlState(
+              'jump',
+              false
+            )
+
+          }
+
+        } catch {}
+
+      }, 250)
+
+    } catch {}
 
   }, 5000)
 }
 
 // ============================================================
-// SAFE CHAT
+// RESOURCE PACK
 // ============================================================
 
-function sendBotChat(bot, message) {
-  if (!bot) return false
+function acceptResourcePack(bot) {
 
-  if (
-    typeof bot.chat !== 'function'
-  ) {
-    addLog('❌ bot.chat không khả dụng.')
-    return false
-  }
-
-  if (!message) {
-    return false
-  }
+  if (!bot) return
 
   try {
-    bot.chat(message)
 
-    // Không ghi nội dung login ra log
     if (
-      message.toLowerCase().startsWith('/login') ||
-      message.toLowerCase().startsWith('/register') ||
-      message.toLowerCase().startsWith('/changepassword') ||
-      message.toLowerCase().startsWith('/passwd')
+      typeof bot.acceptResourcePack ===
+      'function'
     ) {
-      addLog('🔐 Đã gửi lệnh đăng nhập.')
-    } else {
-      addLog(`💬 Đã gửi: ${message}`)
-    }
 
-    return true
+      bot.acceptResourcePack()
+
+      addLog(
+        '📦 Server yêu cầu Resource Pack.'
+      )
+
+      addLog(
+        '✅ Đã ACCEPT Resource Pack ngay lập tức.'
+      )
+
+    } else {
+
+      addLog(
+        '⚠️ Mineflayer không có acceptResourcePack().'
+      )
+
+    }
 
   } catch (error) {
-    addLog(`❌ Không thể gửi lệnh: ${error.message}`)
-    return false
+
+    addLog(
+      `❌ Lỗi Resource Pack: ${error.message}`
+    )
+
   }
 }
 
 // ============================================================
-// JSON
+// RECONNECT
 // ============================================================
 
-function sendJSON(res, code, data) {
-  res.writeHead(code, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store'
-  })
+function scheduleReconnect() {
 
-  res.end(JSON.stringify(data))
-}
+  if (manualStop) return
 
-function readJSON(req) {
-  return new Promise((resolve, reject) => {
-    let body = ''
+  if (reconnectTimer) return
 
-    req.on('data', chunk => {
-      body += chunk.toString()
+  botStatus =
+    'Offline — thử lại sau 15 giây'
 
-      if (body.length > 1024 * 1024) {
-        reject(new Error('Request quá lớn'))
-        req.destroy()
-      }
-    })
+  addLog(
+    '⏳ Tự động kết nối lại sau 15 giây...'
+  )
 
-    req.on('end', () => {
-      try {
-        resolve(
-          body
-            ? JSON.parse(body)
-            : {}
-        )
-      } catch {
-        reject(new Error('JSON không hợp lệ'))
-      }
-    })
+  reconnectTimer =
+    setTimeout(() => {
 
-    req.on('error', reject)
-  })
-}
-
-// ============================================================
-// WEB SERVER
-// ============================================================
-
-function startWebServer(port) {
-
-  const server = http.createServer(
-    async (req, res) => {
-
-      const parsed = url.parse(
-        req.url,
-        true
-      )
-
-      const pathname = parsed.pathname
-
-      // ------------------------------------------------------
-      // HEALTH
-      // ------------------------------------------------------
+      reconnectTimer = null
 
       if (
-        pathname === '/health' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          online: isOnline,
-          status: botStatus,
-          uptime: getUptime()
-        })
-      }
-
-      // ------------------------------------------------------
-      // AUTH
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/check-auth' &&
-        req.method === 'GET'
-      ) {
-
-        const ip = getClientIP(req)
-
-        return sendJSON(res, 200, {
-          isAuth: authenticatedIPs.has(ip)
-        })
-      }
-
-      // ------------------------------------------------------
-      // STATUS
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/status' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          online: isOnline,
-          status: botStatus,
-          bot: BOT_USERNAME,
-          server: SERVER_HOST,
-          port: SERVER_PORT,
-          version: MC_VERSION,
-          uptime: getUptime()
-        })
-      }
-
-      // ------------------------------------------------------
-      // INVENTORY
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/get-inventory' &&
-        req.method === 'GET'
-      ) {
-
-        return sendJSON(res, 200, {
-          success: true,
-          items: getInventoryItems(),
-          vault: currentVault
-        })
-      }
-
-      // ------------------------------------------------------
-      // CHAT
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/send-chat' &&
-        req.method === 'POST'
-      ) {
-
-        try {
-
-          const data =
-            await readJSON(req)
-
-          if (!authenticate(req, data)) {
-            return sendJSON(res, 401, {
-              success: false,
-              message: 'Sai mật khẩu Dashboard!'
-            })
-          }
-
-          if (
-            !isOnline ||
-            !botInstance
-          ) {
-            return sendJSON(res, 400, {
-              success: false,
-              message: 'Bot chưa online!'
-            })
-          }
-
-          const message =
-            typeof data.message === 'string'
-              ? data.message.trim()
-              : ''
-
-          if (!message) {
-            return sendJSON(res, 400, {
-              success: false,
-              message: 'Tin nhắn trống!'
-            })
-          }
-
-          sendBotChat(
-            botInstance,
-            message
-          )
-
-          return sendJSON(res, 200, {
-            success: true,
-            message: 'Đã gửi thành công!',
-            isAuth: true
-          })
-
-        } catch (error) {
-
-          return sendJSON(res, 400, {
-            success: false,
-            message: error.message
-          })
-        }
-      }
-
-      // ------------------------------------------------------
-      // STOP
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/stop-bot' &&
-        req.method === 'POST'
-      ) {
-
-        try {
-
-          const data =
-            await readJSON(req)
-
-          if (!authenticate(req, data)) {
-            return sendJSON(res, 401, {
-              success: false,
-              message: 'Sai mật khẩu Dashboard!'
-            })
-          }
-
-          manualStop = true
-
-          stopAllModes()
-
-          const bot =
-            botInstance
-
-          botInstance = null
-          isOnline = false
-          isConnecting = false
-
-          botStatus =
-            'Đã dừng thủ công (Offline)'
-
-          if (bot) {
-            try {
-              bot.quit(
-                'Stopped from Dashboard'
-              )
-            } catch {}
-
-            try {
-              bot.end()
-            } catch {}
-          }
-
-          addLog(
-            '🛑 Bot đã được tắt từ Dashboard.'
-          )
-
-          return sendJSON(res, 200, {
-            success: true,
-            message: 'Đã tắt bot!',
-            isAuth: true
-          })
-
-        } catch (error) {
-
-          return sendJSON(res, 400, {
-            success: false,
-            message: error.message
-          })
-        }
-      }
-
-      // ------------------------------------------------------
-      // RESTART
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/restart' &&
-        req.method === 'POST'
-      ) {
-
-        try {
-
-          const data =
-            await readJSON(req)
-
-          if (!authenticate(req, data)) {
-            return sendJSON(res, 401, {
-              success: false,
-              message: 'Sai mật khẩu Dashboard!'
-            })
-          }
-
-          if (isConnecting) {
-            return sendJSON(res, 400, {
-              success: false,
-              message: 'Bot đang kết nối!'
-            })
-          }
-
-          addLog(
-            '🔄 Yêu cầu restart bot.'
-          )
-
-          manualStop = false
-
-          stopAllModes()
-
-          const oldBot =
-            botInstance
-
-          botInstance = null
-          isOnline = false
-          isConnecting = false
-
-          if (oldBot) {
-            try {
-              oldBot.quit(
-                'Restart'
-              )
-            } catch {}
-
-            try {
-              oldBot.end()
-            } catch {}
-          }
-
-          botStatus =
-            'Đang restart...'
-
-          setTimeout(() => {
-            createBotInstance()
-          }, 1000)
-
-          return sendJSON(res, 200, {
-            success: true,
-            message: 'Đang restart bot...'
-          })
-
-        } catch (error) {
-
-          return sendJSON(res, 400, {
-            success: false,
-            message: error.message
-          })
-        }
-      }
-
-      // ------------------------------------------------------
-      // FAVICON
-      // ------------------------------------------------------
-
-      if (
-        pathname === '/favicon.ico'
-      ) {
-        res.writeHead(204)
-        return res.end()
-      }
-
-      // ======================================================
-      // DASHBOARD
-      // ======================================================
-
-      const statusColor =
+        manualStop ||
+        isConnecting ||
         isOnline
-          ? '#4ade80'
-          : '#f87171'
-
-      res.writeHead(200, {
-        'Content-Type':
-          'text/html; charset=utf-8',
-        'Cache-Control':
-          'no-store'
-      })
-
-      res.end(`<!DOCTYPE html>
-
-<html lang="vi">
-
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
->
-
-<title>AFK Bot 2</title>
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  min-height: 100vh;
-
-  display: flex;
-  justify-content: center;
-  align-items: center;
-
-  padding: 20px;
-
-  background: #0f172a;
-  color: white;
-
-  font-family:
-    Arial,
-    sans-serif;
-}
-
-.card {
-  width: 100%;
-  max-width: 600px;
-
-  background: #1e293b;
-
-  border: 1px solid #334155;
-  border-radius: 18px;
-
-  padding: 24px;
-
-  box-shadow:
-    0 20px 50px
-    rgba(0,0,0,.4);
-}
-
-.title {
-  text-align: center;
-
-  font-size: 24px;
-  font-weight: 800;
-
-  color: #38bdf8;
-
-  margin-bottom: 12px;
-}
-
-.status {
-  width: fit-content;
-
-  margin:
-    0 auto 18px;
-
-  padding:
-    7px 14px;
-
-  border-radius: 20px;
-
-  color: ${statusColor};
-
-  background:
-    rgba(255,255,255,.05);
-
-  font-weight: 700;
-}
-
-.grid {
-  display: grid;
-
-  grid-template-columns:
-    repeat(2, 1fr);
-
-  gap: 8px;
-}
-
-.box {
-  background: #0f172a;
-
-  padding: 12px;
-
-  border-radius: 10px;
-}
-
-.label {
-  font-size: 10px;
-
-  color: #64748b;
-
-  font-weight: 700;
-}
-
-.value {
-  margin-top: 5px;
-
-  font-size: 13px;
-
-  font-weight: 700;
-}
-
-.section {
-  color: #38bdf8;
-
-  font-size: 12px;
-
-  font-weight: 800;
-
-  margin:
-    18px 0 7px;
-}
-
-.table {
-  max-height: 180px;
-
-  overflow-y: auto;
-
-  background: #0f172a;
-
-  border: 1px solid #334155;
-
-  border-radius: 10px;
-}
-
-table {
-  width: 100%;
-
-  border-collapse:
-    collapse;
-}
-
-th,
-td {
-  padding: 9px;
-
-  border-bottom:
-    1px solid #1e293b;
-
-  text-align: left;
-
-  font-size: 12px;
-}
-
-th {
-  color: #38bdf8;
-
-  background: #1e293b;
-}
-
-input {
-  width: 100%;
-
-  padding: 11px;
-
-  margin-bottom: 8px;
-
-  border:
-    1px solid #334155;
-
-  border-radius: 9px;
-
-  background: #0f172a;
-
-  color: white;
-
-  outline: none;
-}
-
-button {
-  width: 100%;
-
-  padding: 11px;
-
-  border: none;
-
-  border-radius: 9px;
-
-  font-weight: 800;
-
-  cursor: pointer;
-}
-
-.send {
-  background: #38bdf8;
-}
-
-.buttons {
-  display: flex;
-
-  gap: 10px;
-
-  margin-top: 15px;
-}
-
-.buttons button {
-  flex: 1;
-}
-
-.stop {
-  background: #ef4444;
-  color: white;
-}
-
-.restart {
-  background: #22c55e;
-  color: white;
-}
-
-.logs {
-  height: 160px;
-
-  overflow-y: auto;
-
-  padding: 10px;
-
-  background: #090d16;
-
-  border-radius: 10px;
-
-  color: #a7f3d0;
-
-  font-family: monospace;
-
-  font-size: 11px;
-}
-
-.log {
-  margin-bottom: 5px;
-}
-
-@media(max-width:500px) {
-
-  .grid {
-    grid-template-columns: 1fr;
-  }
-
-  .buttons {
-    flex-direction: column;
-  }
-
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="card">
-
-<div class="title">
-🤖 MINECRAFT AFK BOT 2
-</div>
-
-<div class="status">
-● ${botStatus}
-</div>
-
-<div class="grid">
-
-<div class="box">
-<div class="label">BOT</div>
-<div class="value">${BOT_USERNAME}</div>
-</div>
-
-<div class="box">
-<div class="label">SERVER</div>
-<div class="value">
-${SERVER_HOST}:${SERVER_PORT}
-</div>
-</div>
-
-<div class="box">
-<div class="label">VERSION</div>
-<div class="value">${MC_VERSION}</div>
-</div>
-
-<div class="box">
-<div class="label">UPTIME</div>
-<div class="value">${getUptime()}</div>
-</div>
-
-</div>
-
-<div class="section">
-🎒 TÚI ĐỒ
-</div>
-
-<div class="table">
-
-<table>
-
-<thead>
-
-<tr>
-<th>Slot</th>
-<th>Vật phẩm</th>
-<th>Số lượng</th>
-</tr>
-
-</thead>
-
-<tbody id="inventory">
-
-<tr>
-<td colspan="3">
-Đang tải...
-</td>
-</tr>
-
-</tbody>
-
-</table>
-
-</div>
-
-<div class="section">
-💬 CHAT / LỆNH
-</div>
-
-<input
-  id="message"
-  placeholder="Nhập tin nhắn hoặc lệnh..."
->
-
-<input
-  id="password"
-  type="password"
-  placeholder="Mật khẩu Dashboard"
->
-
-<button
-  class="send"
-  onclick="sendChat()"
->
-🚀 Gửi
-</button>
-
-<div class="section">
-📜 NHẬT KÝ
-</div>
-
-<div class="logs">
-
-${logs.map(log =>
-  `<div class="log">${String(log)
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')}</div>`
-).join('')}
-
-</div>
-
-<div class="buttons">
-
-<button
-  class="stop"
-  onclick="stopBot()"
->
-🛑 Tắt Bot
-</button>
-
-<button
-  class="restart"
-  onclick="restartBot()"
->
-🔄 Restart
-</button>
-
-</div>
-
-</div>
-
-<script>
-
-let authenticated = false
-
-async function checkAuth() {
-
-  try {
-
-    const r =
-      await fetch('/check-auth')
-
-    const d =
-      await r.json()
-
-    authenticated =
-      Boolean(d.isAuth)
-
-    if (authenticated) {
-
-      document
-        .getElementById('password')
-        .style.display = 'none'
-    }
-
-  } catch {}
-
-}
-
-async function fetchInventory() {
-
-  try {
-
-    const r =
-      await fetch('/get-inventory')
-
-    const d =
-      await r.json()
-
-    if (!d.success) return
-
-    const tbody =
-      document
-        .getElementById('inventory')
-
-    if (!d.items.length) {
-
-      tbody.innerHTML =
-        '<tr><td colspan="3">Túi đồ trống</td></tr>'
-
-      return
-    }
-
-    tbody.innerHTML =
-      d.items.map(item => \`
-
-<tr>
-
-<td>\${item.slot}</td>
-
-<td>\${item.name}</td>
-
-<td>x\${item.count}</td>
-
-</tr>
-
-\`).join('')
-
-  } catch {}
-
-}
-
-async function sendChat() {
-
-  const message =
-    document
-      .getElementById('message')
-      .value
-      .trim()
-
-  const password =
-    document
-      .getElementById('password')
-      .value
-
-  if (!message) {
-    alert('Nhập tin nhắn!')
-    return
-  }
-
-  if (!authenticated && !password) {
-    alert('Nhập mật khẩu Dashboard!')
-    return
-  }
-
-  try {
-
-    const r =
-      await fetch('/send-chat', {
-
-        method: 'POST',
-
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-
-        body: JSON.stringify({
-          message,
-          password
-        })
-
-      })
-
-    const d =
-      await r.json()
-
-    alert(d.message)
-
-    if (d.success) {
-
-      authenticated = true
-
-      document
-        .getElementById('message')
-        .value = ''
-
-      document
-        .getElementById('password')
-        .style.display = 'none'
-    }
-
-  } catch {
-
-    alert('Không kết nối được Dashboard!')
-  }
-
-}
-
-async function stopBot() {
-
-  if (
-    !confirm(
-      'Bạn chắc chắn muốn tắt Bot?'
-    )
-  ) return
-
-  const password =
-    document
-      .getElementById('password')
-      .value
-
-  try {
-
-    const r =
-      await fetch('/stop-bot', {
-
-        method: 'POST',
-
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-
-        body: JSON.stringify({
-          password
-        })
-
-      })
-
-    const d =
-      await r.json()
-
-    alert(d.message)
-
-    setTimeout(
-      () => location.reload(),
-      1000
-    )
-
-  } catch {
-
-    alert('Không kết nối được Dashboard!')
-  }
-
-}
-
-async function restartBot() {
-
-  const password =
-    document
-      .getElementById('password')
-      .value
-
-  try {
-
-    const r =
-      await fetch('/restart', {
-
-        method: 'POST',
-
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-
-        body: JSON.stringify({
-          password
-        })
-
-      })
-
-    const d =
-      await r.json()
-
-    alert(d.message)
-
-    setTimeout(
-      () => location.reload(),
-      1500
-    )
-
-  } catch {
-
-    alert('Không kết nối được Dashboard!')
-  }
-
-}
-
-window.addEventListener(
-  'load',
-  () => {
-
-    checkAuth()
-
-    fetchInventory()
-
-    setInterval(
-      fetchInventory,
-      5000
-    )
-
-  }
-)
-
-</script>
-
-</body>
-
-</html>`)
-
-    }
-  )
-
-  server.listen(
-    port,
-    '0.0.0.0',
-    () => {
-
-      console.log(
-        `[Web] Running on port ${port}`
+      ) {
+        return
+      }
+
+      addLog(
+        '🔄 Bắt đầu kết nối lại...'
       )
 
-    }
-  )
+      createBot()
 
-  server.on(
-    'error',
-    error => {
-
-      console.error(
-        '[Web Error]',
-        error
-      )
-
-    }
-  )
-
-  return server
+    }, RECONNECT_DELAY)
 }
 
 // ============================================================
 // CREATE BOT
 // ============================================================
 
-function createBotInstance() {
-
-  if (manualStop) {
-    return
-  }
+function createBot() {
 
   if (isConnecting) {
+
+    addLog(
+      '⚠️ Đã có kết nối đang chạy.'
+    )
+
     return
   }
 
-  isConnecting = true
+  if (isOnline) {
 
-  stopAllModes()
+    addLog(
+      '⚠️ Bot đang online.'
+    )
 
-  if (botInstance) {
-
-    try {
-      botInstance.end()
-    } catch {}
-
-    botInstance = null
+    return
   }
 
-  isOnline = false
+  manualStop = false
+  isConnecting = true
+
+  stopTimers()
 
   botStatus =
     'Đang kết nối server Minecraft...'
 
   addLog(
-    `Đang kết nối ${SERVER_HOST}:${SERVER_PORT}...`
+    `Đang kết nối ${MC_HOST}:${MC_PORT}...`
   )
 
   let bot
@@ -1314,19 +341,18 @@ function createBotInstance() {
     bot =
       mineflayer.createBot({
 
-        host: SERVER_HOST,
+        host: MC_HOST,
 
-        port: SERVER_PORT,
+        port: MC_PORT,
 
         username: BOT_USERNAME,
 
         version: MC_VERSION,
 
-        // Cho server có thời gian handshake
-        checkTimeoutInterval: 120000,
+        // Quan trọng khi server chậm handshake
+        connectTimeout: 30000,
 
-        // Không tự kick vì timeout quá ngắn
-        hideErrors: false
+        checkTimeoutInterval: 120000
 
       })
 
@@ -1352,7 +378,35 @@ function createBotInstance() {
   let loginSent = false
 
   // ==========================================================
-  // SOCKET / LOGIN EVENT
+  // TCP CONNECT
+  // ==========================================================
+
+  bot._client?.socket?.on(
+    'connect',
+    () => {
+
+      addLog(
+        '🔌 TCP đã kết nối tới server.'
+      )
+
+    }
+  )
+
+  // ==========================================================
+  // RESOURCE PACK — ĐẶT SỚM
+  // ==========================================================
+
+  bot.on(
+    'resourcePack',
+    () => {
+
+      acceptResourcePack(bot)
+
+    }
+  )
+
+  // ==========================================================
+  // LOGIN PACKET
   // ==========================================================
 
   bot.once(
@@ -1360,68 +414,14 @@ function createBotInstance() {
     () => {
 
       addLog(
-        '🔌 TCP/Minecraft connection thành công.'
+        '🔑 Minecraft handshake/login thành công.'
       )
-
-    }
-  )
-
-  // ==========================================================
-  // RESOURCE PACK
-  // QUAN TRỌNG:
-  // ACCEPT NGAY LẬP TỨC
-  // ==========================================================
-
-  bot.on(
-    'resourcePack',
-    (url, hash) => {
-
-      addLog(
-        '📦 Server yêu cầu Resource Pack.'
-      )
-
-      try {
-
-        if (
-          typeof bot.acceptResourcePack ===
-          'function'
-        ) {
-
-          // ACCEPT NGAY.
-          // KHÔNG await.
-          // KHÔNG tải pack.
-          bot.acceptResourcePack()
-
-          addLog(
-            '✅ Đã ACCEPT Resource Pack ngay lập tức.'
-          )
-
-        } else {
-
-          addLog(
-            '⚠️ Mineflayer không có acceptResourcePack().'
-          )
-
-        }
-
-      } catch (error) {
-
-        addLog(
-          `❌ Lỗi ACCEPT Resource Pack: ${error.message}`
-        )
-
-      }
 
     }
   )
 
   // ==========================================================
   // SPAWN
-  //
-  // Đây mới là lúc bắt đầu LOGIN.
-  //
-  // Resource Pack chỉ được ACCEPT ở event phía trên.
-  // Không login trước spawn.
   // ==========================================================
 
   bot.once(
@@ -1436,8 +436,13 @@ function createBotInstance() {
       botStatus =
         'Đang hoạt động (Online)'
 
+      if (spawnTimer) {
+        clearTimeout(spawnTimer)
+        spawnTimer = null
+      }
+
       addLog(
-        `✅ Bot ${BOT_USERNAME} đã SPAWN thành công.`
+        `✅ ${BOT_USERNAME} đã SPAWN vào server.`
       )
 
       // ------------------------------------------------------
@@ -1445,18 +450,35 @@ function createBotInstance() {
       // ------------------------------------------------------
 
       if (
-        !loginSent &&
-        LOGIN_COMMAND
+        LOGIN_COMMAND &&
+        !loginSent
       ) {
 
         loginSent = true
 
         addLog(
-          '⏳ Đang chuẩn bị đăng nhập...'
+          '🔐 Chuẩn bị đăng nhập server...'
         )
 
-        setTimeout(
-          () => {
+        setTimeout(() => {
+
+          if (
+            botInstance !== bot ||
+            !isOnline
+          ) {
+            return
+          }
+
+          sendChat(
+            bot,
+            LOGIN_COMMAND
+          )
+
+          // --------------------------------------------------
+          // HOME COMMAND
+          // --------------------------------------------------
+
+          setTimeout(() => {
 
             if (
               botInstance !== bot ||
@@ -1465,69 +487,68 @@ function createBotInstance() {
               return
             }
 
-            sendBotChat(
-              bot,
-              LOGIN_COMMAND
-            )
+            if (HOME_COMMAND) {
 
-            // ------------------------------------------------
-            // SAU LOGIN → AFK
-            // Không /server eco
-            // Không /tpa
-            // ------------------------------------------------
+              sendChat(
+                bot,
+                HOME_COMMAND
+              )
 
-            setTimeout(
-              () => {
+            }
 
-                if (
-                  botInstance !== bot ||
-                  !isOnline
-                ) {
-                  return
-                }
+            setTimeout(() => {
 
-                addLog(
-                  '✅ Đăng nhập xong → bắt đầu AFK.'
-                )
+              if (
+                botInstance === bot &&
+                isOnline
+              ) {
 
                 startAFK(bot)
 
-              },
-              2500
-            )
+              }
 
-          },
-          1500
-        )
+            }, 1500)
+
+          }, 2500)
+
+        }, 2500)
 
       } else {
 
-        // Không có LOGIN_COMMAND
-        // thì spawn xong AFK luôn.
+        // Không cần login
+        if (HOME_COMMAND) {
 
-        if (!LOGIN_COMMAND) {
-
-          addLog(
-            'ℹ️ Không cấu hình MC_LOGIN_COMMAND → AFK trực tiếp.'
-          )
-
-        }
-
-        setTimeout(
-          () => {
+          setTimeout(() => {
 
             if (
               botInstance === bot &&
               isOnline
             ) {
 
-              startAFK(bot)
+              sendChat(
+                bot,
+                HOME_COMMAND
+              )
 
             }
 
-          },
-          1000
-        )
+          }, 1000)
+
+        }
+
+        setTimeout(() => {
+
+          if (
+            botInstance === bot &&
+            isOnline
+          ) {
+
+            startAFK(bot)
+
+          }
+
+        }, 2000)
+
       }
 
     }
@@ -1537,27 +558,66 @@ function createBotInstance() {
   // SPAWN TIMEOUT
   // ==========================================================
 
-  setTimeout(
-    () => {
+  spawnTimer =
+    setTimeout(() => {
 
       if (
-        botInstance === bot &&
-        isConnecting &&
-        !spawned
+        botInstance !== bot ||
+        spawned ||
+        !isConnecting
       ) {
-
-        addLog(
-          '⚠️ Quá 45 giây nhưng Bot chưa SPAWN.'
-        )
-
-        addLog(
-          '⚠️ Server có thể đang chặn bot hoặc yêu cầu handshake khác.'
-        )
-
+        return
       }
 
-    },
-    45000
+      addLog(
+        '⚠️ Quá 60 giây nhưng Bot chưa SPAWN.'
+      )
+
+      addLog(
+        '⚠️ Server có thể yêu cầu handshake/auth khác hoặc đang chặn bot.'
+      )
+
+      try {
+        bot.end()
+      } catch {}
+
+    }, SPAWN_TIMEOUT)
+
+  // ==========================================================
+  // CHAT / MESSAGE
+  // ==========================================================
+
+  bot.on(
+    'message',
+    message => {
+
+      try {
+
+        const text =
+          message.toString().trim()
+
+        if (!text) return
+
+        // Không log password
+        if (
+          text.toLowerCase().includes('/login') ||
+          text.toLowerCase().includes('/register')
+        ) {
+
+          addLog(
+            '💬 Server gửi thông báo đăng nhập.'
+          )
+
+          return
+        }
+
+        addLog(
+          `📨 Server: ${text}`
+        )
+
+      } catch {}
+
+    }
   )
 
   // ==========================================================
@@ -1572,174 +632,59 @@ function createBotInstance() {
         '💀 Bot đã chết.'
       )
 
-      stopAllModes()
+      if (afkTimer) {
 
-      setTimeout(
-        () => {
+        clearInterval(afkTimer)
 
-          if (
-            botInstance !== bot ||
-            !isOnline
-          ) {
-            return
-          }
-
-          try {
-
-            if (
-              typeof bot.respawn ===
-              'function'
-            ) {
-
-              bot.respawn()
-
-            }
-
-          } catch {}
-
-        },
-        1000
-      )
-
-      setTimeout(
-        () => {
-
-          if (
-            botInstance !== bot ||
-            !isOnline
-          ) {
-            return
-          }
-
-          addLog(
-            '🔄 Đã hồi sinh → tiếp tục AFK.'
-          )
-
-          startAFK(bot)
-
-        },
-        3500
-      )
-
-    }
-  )
-
-  // ==========================================================
-  // WINDOW
-  // ==========================================================
-
-  bot.on(
-    'windowOpen',
-    window => {
-
-      try {
-
-        let title = 'Kho'
-
-        if (window.title) {
-
-          try {
-
-            const parsed =
-              typeof window.title === 'string'
-                ? JSON.parse(window.title)
-                : window.title
-
-            if (
-              parsed &&
-              parsed.text
-            ) {
-              title = parsed.text
-            } else {
-              title =
-                String(window.title)
-            }
-
-          } catch {
-
-            title =
-              String(window.title)
-          }
-
-        }
-
-        const items =
-          typeof window.containerItems ===
-          'function'
-            ? window.containerItems()
-            : []
-
-        currentVault = {
-
-          title,
-
-          items:
-            items.map(item => ({
-              name:
-                item.displayName ||
-                item.name,
-
-              count:
-                item.count,
-
-              slot:
-                item.slot
-            }))
-
-        }
-
-        addLog(
-          `📦 Đã mở giao diện: ${title}`
-        )
-
-      } catch (error) {
-
-        addLog(
-          `⚠️ Lỗi đọc cửa sổ: ${error.message}`
-        )
+        afkTimer = null
 
       }
 
-    }
-  )
-
-  // ==========================================================
-  // SERVER MESSAGE
-  // ==========================================================
-
-  bot.on(
-    'message',
-    message => {
-
-      try {
-
-        const text =
-          message.toString().trim()
-
-        if (!text) return
-
-        // Không ghi password/login vào log
-        const lower =
-          text.toLowerCase()
+      setTimeout(() => {
 
         if (
-          lower.includes('/login') ||
-          lower.includes('/register') ||
-          lower.includes('password')
+          botInstance !== bot ||
+          !isOnline
         ) {
-
-          addLog(
-            '[Server]: [Thông tin đăng nhập đã ẩn]'
-          )
-
           return
         }
 
-        addLog(
-          `[Server]: ${text}`
-        )
+        try {
 
-      } catch {}
+          if (
+            typeof bot.respawn ===
+            'function'
+          ) {
+
+            bot.respawn()
+
+          }
+
+        } catch {}
+
+        setTimeout(() => {
+
+          if (
+            botInstance !== bot ||
+            !isOnline
+          ) {
+            return
+          }
+
+          if (HOME_COMMAND) {
+
+            sendChat(
+              bot,
+              HOME_COMMAND
+            )
+
+          }
+
+          startAFK(bot)
+
+        }, 3000)
+
+      }, 1500)
 
     }
   )
@@ -1752,32 +697,24 @@ function createBotInstance() {
     'kicked',
     reason => {
 
-      isOnline = false
-      isConnecting = false
-
-      stopAllModes()
-
-      let reasonText
+      let text
 
       try {
 
-        reasonText =
+        text =
           typeof reason === 'string'
             ? reason
             : JSON.stringify(reason)
 
       } catch {
 
-        reasonText =
+        text =
           String(reason)
 
       }
 
-      botStatus =
-        'Bị kick khỏi server'
-
       addLog(
-        `⚠️ Bot bị kick: ${reasonText}`
+        `⚠️ Bot bị KICK: ${text}`
       )
 
     }
@@ -1791,14 +728,8 @@ function createBotInstance() {
     'error',
     error => {
 
-      isOnline = false
-      isConnecting = false
-
-      botStatus =
-        'Lỗi kết nối'
-
       addLog(
-        `❌ Lỗi: ${error.message}`
+        `❌ Lỗi bot: ${error.message}`
       )
 
       if (error.code) {
@@ -1820,9 +751,24 @@ function createBotInstance() {
     'end',
     reason => {
 
-      isOnline = false
+      if (spawnTimer) {
 
-      stopAllModes()
+        clearTimeout(spawnTimer)
+
+        spawnTimer = null
+
+      }
+
+      if (afkTimer) {
+
+        clearInterval(afkTimer)
+
+        afkTimer = null
+
+      }
+
+      isOnline = false
+      isConnecting = false
 
       if (
         botInstance === bot
@@ -1834,42 +780,32 @@ function createBotInstance() {
 
       if (manualStop) {
 
-        isConnecting = false
-
         botStatus =
-          'Đã dừng thủ công (Offline)'
+          'Đã dừng thủ công'
 
         addLog(
-          'Bot đã dừng thủ công.'
+          '🛑 Bot đã dừng.'
         )
 
         return
       }
 
-      isConnecting = false
+      if (!spawned) {
 
-      botStatus =
-        'Mất kết nối — đang thử lại...'
+        addLog(
+          `⚠️ Bot mất kết nối trước khi SPAWN: ${reason || 'socketClosed'}`
+        )
 
-      let reasonText = ''
+      } else {
 
-      try {
-
-        reasonText =
-          reason
-            ? String(reason)
-            : 'socketClosed'
-
-      } catch {
-
-        reasonText =
-          'socketClosed'
+        addLog(
+          `⚠️ Bot mất kết nối: ${reason || 'socketClosed'}`
+        )
 
       }
 
-      addLog(
-        `⚠️ Bot mất kết nối: ${reasonText}`
-      )
+      botStatus =
+        'Mất kết nối — đang reconnect...'
 
       scheduleReconnect()
 
@@ -1878,51 +814,239 @@ function createBotInstance() {
 }
 
 // ============================================================
-// RECONNECT
+// WEB SERVER
 // ============================================================
 
-function scheduleReconnect() {
+function startWebServer() {
 
-  if (manualStop) {
-    return
-  }
-
-  if (reconnectTimeout) {
-    return
-  }
-
-  const delay = 15000
-
-  botStatus =
-    'Offline — thử lại sau 15 giây'
-
-  addLog(
-    '⏳ Tự động kết nối lại sau 15 giây...'
-  )
-
-  reconnectTimeout =
-    setTimeout(
-      () => {
-
-        reconnectTimeout = null
+  const server =
+    http.createServer(
+      (req, res) => {
 
         if (
-          manualStop ||
-          isOnline ||
-          isConnecting
+          req.url === '/health'
         ) {
-          return
+
+          res.writeHead(
+            200,
+            {
+              'Content-Type':
+                'application/json; charset=utf-8'
+            }
+          )
+
+          return res.end(
+            JSON.stringify({
+              success: true,
+              online: isOnline,
+              status: botStatus,
+              uptime: getUptime()
+            })
+          )
+
         }
 
-        addLog(
-          '🔄 Bắt đầu kết nối lại...'
+        if (
+          req.url === '/status'
+        ) {
+
+          res.writeHead(
+            200,
+            {
+              'Content-Type':
+                'application/json; charset=utf-8'
+            }
+          )
+
+          return res.end(
+            JSON.stringify({
+
+              success: true,
+
+              online:
+                isOnline,
+
+              connecting:
+                isConnecting,
+
+              status:
+                botStatus,
+
+              server:
+                `${MC_HOST}:${MC_PORT}`,
+
+              version:
+                MC_VERSION,
+
+              bot:
+                BOT_USERNAME,
+
+              uptime:
+                getUptime(),
+
+              logs
+
+            })
+          )
+
+        }
+
+        res.writeHead(
+          200,
+          {
+            'Content-Type':
+              'text/html; charset=utf-8'
+          }
         )
 
-        createBotInstance()
+        res.end(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AFK Bot 2</title>
 
-      },
-      delay
+<style>
+body{
+  margin:0;
+  background:#0f172a;
+  color:#e2e8f0;
+  font-family:Arial,sans-serif;
+  padding:20px;
+}
+.card{
+  max-width:700px;
+  margin:auto;
+  background:#1e293b;
+  border-radius:16px;
+  padding:20px;
+}
+h1{
+  text-align:center;
+  color:#38bdf8;
+}
+.box{
+  background:#0f172a;
+  padding:12px;
+  margin:8px 0;
+  border-radius:10px;
+}
+.online{
+  color:#4ade80;
+  font-weight:bold;
+}
+.offline{
+  color:#f87171;
+  font-weight:bold;
+}
+pre{
+  white-space:pre-wrap;
+  word-break:break-word;
+  background:#020617;
+  padding:12px;
+  border-radius:10px;
+  max-height:400px;
+  overflow:auto;
+}
+</style>
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>🤖 AFK BOT 2</h1>
+
+<div class="box">
+Server:
+<strong>${MC_HOST}:${MC_PORT}</strong>
+</div>
+
+<div class="box">
+Bot:
+<strong>${BOT_USERNAME}</strong>
+</div>
+
+<div class="box">
+Version:
+<strong>${MC_VERSION}</strong>
+</div>
+
+<div class="box">
+Status:
+<span id="status">Đang tải...</span>
+</div>
+
+<div class="box">
+Uptime:
+<span id="uptime">...</span>
+</div>
+
+<pre id="logs">Đang tải log...</pre>
+
+</div>
+
+<script>
+
+async function update(){
+
+  try{
+
+    const r =
+      await fetch('/status')
+
+    const d =
+      await r.json()
+
+    const status =
+      document.getElementById('status')
+
+    status.textContent =
+      d.status
+
+    status.className =
+      d.online
+        ? 'online'
+        : 'offline'
+
+    document.getElementById('uptime')
+      .textContent =
+        d.uptime
+
+    document.getElementById('logs')
+      .textContent =
+        d.logs.join('\\n')
+
+  }catch{}
+
+}
+
+update()
+
+setInterval(
+  update,
+  3000
+)
+
+</script>
+
+</body>
+</html>`)
+
+      }
     )
+
+  server.listen(
+    WEB_PORT,
+    '0.0.0.0',
+    () => {
+
+      console.log(
+        `[Web] Running on port ${WEB_PORT}`
+      )
+
+    }
+  )
 }
 
 // ============================================================
@@ -1939,7 +1063,7 @@ process.on(
     )
 
     addLog(
-      `❌ Lỗi hệ thống: ${error.message}`
+      `💥 uncaughtException: ${error.message}`
     )
 
   }
@@ -1955,7 +1079,7 @@ process.on(
     )
 
     addLog(
-      `❌ Promise lỗi: ${String(reason)}`
+      `💥 unhandledRejection: ${String(reason)}`
     )
 
   }
@@ -1965,29 +1089,16 @@ process.on(
   'SIGTERM',
   () => {
 
-    console.log(
-      'SIGTERM → đóng Bot.'
-    )
-
     manualStop = true
 
-    stopAllModes()
+    stopTimers()
 
-    const bot =
-      botInstance
-
-    botInstance = null
-
-    if (bot) {
+    if (botInstance) {
 
       try {
-        bot.quit(
+        botInstance.quit(
           'Render shutting down'
         )
-      } catch {}
-
-      try {
-        bot.end()
       } catch {}
 
     }
@@ -2017,7 +1128,7 @@ console.log(
 )
 
 console.log(
-  `Server : ${SERVER_HOST}:${SERVER_PORT}`
+  `Server : ${MC_HOST}:${MC_PORT}`
 )
 
 console.log(
@@ -2036,14 +1147,16 @@ console.log(
   '=========================================='
 )
 
-// Web trước
-startWebServer(WEB_PORT)
+startWebServer()
 
-// Bot sau
 setTimeout(
   () => {
 
-    createBotInstance()
+    addLog(
+      '🔄 Bắt đầu kết nối...'
+    )
+
+    createBot()
 
   },
   1000
