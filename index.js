@@ -4,7 +4,7 @@ const url = require('url')
 
 const SERVER_HOST = 'puffernetwork.io.vn'
 const SERVER_PORT = 25863
-const BOT_USERNAME = 'hellodomcon123'
+const BOT_USERNAME = 'helldomcon123'
 const LOGIN_COMMAND = '/login domcon1234'
 const HOME_COMMAND = '/tpa domcon123'
 const WEB_PASSWORD = 'condombebong123'
@@ -23,6 +23,10 @@ let isOnline = false
 let startTime = Date.now()
 let logs = []
 let botInstance = null
+
+// Biến quản lý Auto-Reconnect
+let reconnectTimer = null
+let autoReconnectEnabled = true 
 
 let currentVault = {
   title: 'Chưa mở kho nào',
@@ -122,7 +126,6 @@ function startWebServer(port) {
       return
     }
 
-    // API Dừng Bot (Yêu cầu xác thực)
     if (parsedUrl.pathname === '/stop-bot' && req.method === 'POST') {
       let body = ''
       req.on('data', chunk => { body += chunk.toString() })
@@ -138,13 +141,13 @@ function startWebServer(port) {
             authenticatedIPs.add(clientIP)
           }
 
-          if (!isOnline || !botInstance) {
-            res.writeHead(400, { 'Content-Type': 'application/json' })
-            return res.end(JSON.stringify({ success: false, message: 'Bot đã dừng từ trước!' }))
-          }
+          autoReconnectEnabled = false // Tắt tự động Reconnect khi bấm Stop thủ công
+          if (reconnectTimer) clearTimeout(reconnectTimer)
 
-          addLog('Yêu cầu ngắt kết nối Bot từ Web Dashboard...')
-          botInstance.quit('Được tắt bởi Admin qua Web Dashboard')
+          if (botInstance) {
+            botInstance.quit('Được tắt bởi Admin qua Web Dashboard')
+          }
+          
           botStatus = 'Đã dừng thủ công (Offline)'
           isOnline = false
           
@@ -160,6 +163,8 @@ function startWebServer(port) {
 
     if (parsedUrl.pathname === '/restart' && req.method === 'POST') {
       if (!isOnline) {
+        autoReconnectEnabled = true // Bật lại tính năng Reconnect
+        if (reconnectTimer) clearTimeout(reconnectTimer)
         addLog('Yêu cầu khởi động lại bot từ Web Dashboard...')
         if (botInstance) botInstance.end()
         createBotInstance()
@@ -492,6 +497,22 @@ function startWebServer(port) {
 
 startWebServer(process.env.PORT || 8080)
 
+// Hàm xử lý Reconnect
+function handleReconnect() {
+  if (!autoReconnectEnabled) return
+  if (reconnectTimer) clearTimeout(reconnectTimer)
+
+  botStatus = 'Đang đếm ngược kết nối lại (10s)...'
+  addLog('🔄 Mất kết nối! Sẽ tự động kết nối lại sau 10 giây...')
+
+  reconnectTimer = setTimeout(() => {
+    if (autoReconnectEnabled) {
+      if (botInstance) botInstance.removeAllListeners()
+      createBotInstance()
+    }
+  }, 10000)
+}
+
 function createBotInstance() {
   botStatus = 'Đang kết nối server...'
   isOnline = false
@@ -566,7 +587,7 @@ function createBotInstance() {
 
       setTimeout(() => {
         safeChat(HOME_COMMAND)
-        addLog('Đã thực hiện dịch chuyển /home 1')
+        addLog(`Đã gửi yêu cầu dịch chuyển ${HOME_COMMAND}`)
       }, 2000)
     }, 3000)
 
@@ -582,7 +603,7 @@ function createBotInstance() {
     bot.respawn()
     setTimeout(() => {
       safeChat(HOME_COMMAND)
-      addLog('Đã dịch chuyển lại về /home 1 sau khi hồi sinh')
+      addLog(`Đã gửi lại yêu cầu ${HOME_COMMAND} sau khi hồi sinh`)
     }, 2000)
   })
 
@@ -599,21 +620,21 @@ function createBotInstance() {
   })
 
   bot.on('kicked', (reason) => {
-    botStatus = 'Bị đá khỏi server (Offline)'
     isOnline = false
-    addLog(`Mất kết nối: Bot bị đá!`)
+    addLog(`Mất kết nối: Bot bị đá! Lý do: ${reason}`)
+    handleReconnect()
   })
 
   bot.on('error', (error) => {
-    botStatus = 'Gặp lỗi kết nối'
     isOnline = false
-    addLog(`Lỗi: ${error.message}`)
+    addLog(`Lỗi kết nối: ${error.message}`)
+    handleReconnect()
   })
 
   bot.on('end', () => {
-    botStatus = 'Đã ngắt kết nối (Offline)'
     isOnline = false
     addLog('Bot đã thoát khỏi server.')
+    handleReconnect()
   })
 }
 
