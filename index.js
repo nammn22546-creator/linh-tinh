@@ -78,15 +78,6 @@ function startWebServer(port) {
       return res.end(JSON.stringify({ isAuth: authenticatedIPs.has(clientIP) }))
     }
 
-    if (parsedUrl.pathname === '/get-inventory' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      return res.end(JSON.stringify({ 
-        success: true, 
-        items: getInventoryItems(),
-        vault: currentVault 
-      }))
-    }
-
     if (parsedUrl.pathname === '/send-chat' && req.method === 'POST') {
       let body = ''
       req.on('data', chunk => { body += chunk.toString() })
@@ -141,7 +132,7 @@ function startWebServer(port) {
             authenticatedIPs.add(clientIP)
           }
 
-          autoReconnectEnabled = false // Tắt tự động Reconnect khi bấm Stop thủ công
+          autoReconnectEnabled = false 
           if (reconnectTimer) clearTimeout(reconnectTimer)
 
           if (botInstance) {
@@ -163,7 +154,7 @@ function startWebServer(port) {
 
     if (parsedUrl.pathname === '/restart' && req.method === 'POST') {
       if (!isOnline) {
-        autoReconnectEnabled = true // Bật lại tính năng Reconnect
+        autoReconnectEnabled = true 
         if (reconnectTimer) clearTimeout(reconnectTimer)
         addLog('Yêu cầu khởi động lại bot từ Web Dashboard...')
         if (botInstance) botInstance.end()
@@ -176,6 +167,8 @@ function startWebServer(port) {
       }
       return
     }
+
+    const inventoryItems = getInventoryItems()
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     res.write(`
@@ -206,8 +199,29 @@ function startWebServer(port) {
             max-width: 520px;
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
             text-align: center;
+            position: relative;
           }
-          .title { font-size: 22px; font-weight: 700; color: #38bdf8; margin-bottom: 12px; }
+          .header-ctrl {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+          }
+          .title { font-size: 20px; font-weight: 700; color: #38bdf8; }
+          .btn-auto-refresh {
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            border: 1px solid #334155;
+            cursor: pointer;
+            background: #0f172a;
+            color: #38bdf8;
+          }
+          .btn-auto-refresh.paused {
+            color: #f87171;
+            border-color: #ef4444;
+          }
           .badge {
             display: inline-block;
             padding: 6px 14px;
@@ -286,22 +300,25 @@ function startWebServer(port) {
             font-size: 13px;
             cursor: pointer;
           }
-          .btn-stop {
-            background: ${isOnline ? '#ef4444' : '#334155'};
-            color: ${isOnline ? '#ffffff' : '#64748b'};
-            cursor: ${isOnline ? 'pointer' : 'not-allowed'};
-          }
-          .btn-stop:hover { background: ${isOnline ? '#dc2626' : '#334155'}; }
+          .btn-stop { background: #ef4444; color: #ffffff; }
+          .btn-stop:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
           
-          .btn-restart {
-            background: ${isOnline ? '#334155' : '#22c55e'};
-            color: ${isOnline ? '#64748b' : '#ffffff'};
-            cursor: ${isOnline ? 'not-allowed' : 'pointer'};
-          }
-          .btn-restart:hover { background: ${isOnline ? '#334155' : '#16a34a'}; }
+          .btn-restart { background: #22c55e; color: #ffffff; }
+          .btn-restart:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
         </style>
         <script>
           let isIPAuthenticated = false;
+          let autoRefreshEnabled = true;
+          let refreshTimer = null;
+
+          function startAutoReload() {
+            if (refreshTimer) clearInterval(refreshTimer);
+            refreshTimer = setInterval(() => {
+              if (autoRefreshEnabled) {
+                location.reload(); // Làm mới (F5) toàn bộ trang
+              }
+            }, 3000); // 3 giây F5 1 lần
+          }
 
           window.onload = function() {
             fetch('/check-auth')
@@ -313,44 +330,34 @@ function startWebServer(port) {
                 }
               });
 
-            setInterval(fetchData, 3000);
+            // Tạm dừng F5 khi người dùng đang bấm vào ô nhập dữ liệu
+            const inputs = document.querySelectorAll('.input-field');
+            inputs.forEach(input => {
+              input.addEventListener('focus', () => { 
+                autoRefreshEnabled = false; 
+                document.getElementById('btnRefreshToggle').innerText = '⏸️ Đang gõ (Tạm dừng F5)';
+                document.getElementById('btnRefreshToggle').classList.add('paused');
+              });
+              input.addEventListener('blur', () => { 
+                autoRefreshEnabled = true; 
+                document.getElementById('btnRefreshToggle').innerText = '⚡ Tự F5: Bật (3s)';
+                document.getElementById('btnRefreshToggle').classList.remove('paused');
+              });
+            });
+
+            startAutoReload();
           }
 
-          function fetchData() {
-            fetch('/get-inventory')
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  const tbody = document.getElementById('invBody');
-                  if (data.items.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="3" class="empty-inv">Túi đồ trống...</td></tr>';
-                  } else {
-                    tbody.innerHTML = data.items.map(i => \`
-                      <tr>
-                        <td>\${i.slot}</td>
-                        <td style="font-weight: 600; color: #f8fafc;">\${i.name}</td>
-                        <td style="color: #4ade80;">x\${i.count}</td>
-                      </tr>
-                    \`).join('');
-                  }
-
-                  const vTitle = document.getElementById('vaultTitle');
-                  const vBody = document.getElementById('vaultBody');
-                  vTitle.innerText = '📦 Kho Vault: ' + data.vault.title;
-
-                  if (!data.vault.items || data.vault.items.length === 0) {
-                    vBody.innerHTML = '<tr><td colspan="3" class="empty-inv">Kho trống hoặc chưa gõ lệnh /pv</td></tr>';
-                  } else {
-                    vBody.innerHTML = data.vault.items.map(i => \`
-                      <tr>
-                        <td>\${i.slot}</td>
-                        <td style="font-weight: 600; color: #f8fafc;">\${i.name}</td>
-                        <td style="color: #38bdf8;">x\${i.count}</td>
-                      </tr>
-                    \`).join('');
-                  }
-                }
-              });
+          function toggleAutoRefresh() {
+            autoRefreshEnabled = !autoRefreshEnabled;
+            const btn = document.getElementById('btnRefreshToggle');
+            if (autoRefreshEnabled) {
+              btn.innerText = '⚡ Tự F5: Bật (3s)';
+              btn.classList.remove('paused');
+            } else {
+              btn.innerText = '⏸️ Tự F5: Đã tắt';
+              btn.classList.add('paused');
+            }
           }
 
           function sendChatMessage() {
@@ -369,18 +376,12 @@ function startWebServer(port) {
             .then(data => {
               alert(data.message);
               if (data.success) {
-                document.getElementById('chatMsg').value = '';
-                if (data.isAuth) {
-                  isIPAuthenticated = true;
-                  document.getElementById('chatPwd').style.display = 'none';
-                }
-                setTimeout(fetchData, 1000);
+                location.reload();
               }
             });
           }
 
           function stopBot() {
-            if (!${isOnline}) return;
             const pwd = document.getElementById('chatPwd').value;
             if (!isIPAuthenticated && !pwd) return alert('Vui lòng nhập mật khẩu xác thực để tắt bot!');
 
@@ -395,29 +396,28 @@ function startWebServer(port) {
             .then(data => {
               alert(data.message);
               if (data.success) {
-                if (data.isAuth) {
-                  isIPAuthenticated = true;
-                  document.getElementById('chatPwd').style.display = 'none';
-                }
-                window.location.reload();
+                location.reload();
               }
             });
           }
 
           function restartBot() {
-            if (${isOnline}) return;
             fetch('/restart', { method: 'POST' })
               .then(res => res.json())
               .then(data => {
                 alert(data.message);
-                window.location.reload();
+                location.reload();
               });
           }
         </script>
       </head>
       <body>
         <div class="card">
-          <div class="title">🤖 AFK Bot Dashboard</div>
+          <div class="header-ctrl">
+            <div class="title">🤖 AFK Bot Dashboard</div>
+            <button id="btnRefreshToggle" class="btn-auto-refresh" onclick="toggleAutoRefresh()">⚡ Tự F5: Bật (3s)</button>
+          </div>
+          
           <div class="badge">● ${botStatus}</div>
           
           <div class="info-group">
@@ -439,13 +439,22 @@ function startWebServer(port) {
                   <th style="width: 20%;">Số lượng</th>
                 </tr>
               </thead>
-              <tbody id="invBody">
-                <tr><td colspan="3" class="empty-inv">Tải dữ liệu...</td></tr>
+              <tbody>
+                ${inventoryItems.length === 0 
+                  ? '<tr><td colspan="3" class="empty-inv">Túi đồ trống...</td></tr>'
+                  : inventoryItems.map(i => `
+                    <tr>
+                      <td>${i.slot}</td>
+                      <td style="font-weight: 600; color: #f8fafc;">${i.name}</td>
+                      <td style="color: #4ade80;">x${i.count}</td>
+                    </tr>
+                  `).join('')
+                }
               </tbody>
             </table>
           </div>
 
-          <div class="section-title" id="vaultTitle">📦 Kho Vault: Chưa mở</div>
+          <div class="section-title">📦 Kho Vault: ${currentVault.title}</div>
           <div class="inv-table-container">
             <table>
               <thead>
@@ -455,8 +464,17 @@ function startWebServer(port) {
                   <th style="width: 20%;">Số lượng</th>
                 </tr>
               </thead>
-              <tbody id="vaultBody">
-                <tr><td colspan="3" class="empty-inv">Gõ /pv 1, /pv 2... để xem kho</td></tr>
+              <tbody>
+                ${!currentVault.items || currentVault.items.length === 0 
+                  ? '<tr><td colspan="3" class="empty-inv">Kho trống hoặc chưa gõ lệnh /pv</td></tr>'
+                  : currentVault.items.map(i => `
+                    <tr>
+                      <td>${i.slot}</td>
+                      <td style="font-weight: 600; color: #f8fafc;">${i.name}</td>
+                      <td style="color: #38bdf8;">x${i.count}</td>
+                    </tr>
+                  `).join('')
+                }
               </tbody>
             </table>
           </div>
@@ -474,10 +492,10 @@ function startWebServer(port) {
           </div>
 
           <div class="action-btn-group">
-            <button class="btn-action btn-stop" onclick="stopBot()" ${isOnline ? '' : 'disabled'}>
+            <button id="btnStop" class="btn-action btn-stop" onclick="stopBot()" ${isOnline ? '' : 'disabled'}>
               🛑 Tắt Bot
             </button>
-            <button class="btn-action btn-restart" onclick="restartBot()" ${isOnline ? 'disabled' : ''}>
+            <button id="btnRestart" class="btn-action btn-restart" onclick="restartBot()" ${isOnline ? 'disabled' : ''}>
               🔄 Bật lại Bot
             </button>
           </div>
